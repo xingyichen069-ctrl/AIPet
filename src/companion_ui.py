@@ -112,12 +112,66 @@ def glass_style(day):
 
 
 class ShrineEmblem(QWidget):
-    """A small painted yin-yang orb; no external artwork or animation."""
+    """Slow waiting rotation and a single quiet completion pulse."""
     def __init__(self):
         super().__init__()
         self.day = True
+        self._spinning = False
+        self._quiet = False
+        self._angle = 0.0
+        self._pulse_started = None
+        self._last_frame = time.monotonic()
+        self.animation_timer = QTimer(self)
+        self.animation_timer.setInterval(33)
+        self.animation_timer.timeout.connect(self._animate)
         self.setFixedSize(52, 52)
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
+
+    def start_waiting(self):
+        self._spinning = True
+        self._pulse_started = None
+        self._sync_animation()
+
+    def finish(self, success=True):
+        self._spinning = False
+        self._pulse_started = time.monotonic() if success and not self._quiet and self.isVisible() else None
+        self._sync_animation()
+
+    def set_quiet(self, quiet):
+        if quiet == self._quiet:
+            return
+        self._quiet = quiet
+        if quiet:
+            self._pulse_started = None
+        self._sync_animation()
+
+    def _sync_animation(self):
+        self._last_frame = time.monotonic()
+        if self.isVisible() and not self._quiet and (self._spinning or self._pulse_started is not None):
+            self.animation_timer.start()
+        else:
+            self.animation_timer.stop()
+        self.update()
+
+    def _animate(self):
+        now = time.monotonic()
+        if self._spinning:
+            self._angle = (self._angle + min(now - self._last_frame, .1) * 36) % 360
+        self._last_frame = now
+        if self._pulse_started is not None and now - self._pulse_started >= 1.2:
+            self._pulse_started = None
+        if not self._spinning and self._pulse_started is None:
+            self.animation_timer.stop()
+        self.update()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._sync_animation()
+
+    def hideEvent(self, event):
+        self.animation_timer.stop()
+        self._pulse_started = None
+        super().hideEvent(event)
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -125,6 +179,10 @@ class ShrineEmblem(QWidget):
         p.setPen(QPen(QColor('#d6b38a' if self.day else '#927959'), 1))
         p.setBrush(Qt.NoBrush)
         p.drawEllipse(QRectF(3, 3, 46, 46))
+        p.save()
+        p.translate(26, 26)
+        p.rotate(self._angle)
+        p.translate(-26, -26)
         p.setPen(Qt.NoPen)
         p.setBrush(QColor('#b4413e'))
         p.drawEllipse(QRectF(8, 8, 36, 36))
@@ -139,9 +197,24 @@ class ShrineEmblem(QWidget):
         p.drawEllipse(QPointF(26, 17), 2.7, 2.7)
         p.setBrush(QColor('#fffaf0' if self.day else '#e3d4ba'))
         p.drawEllipse(QPointF(26, 35), 2.7, 2.7)
+        p.restore()
+        p.setPen(Qt.NoPen)
         p.setBrush(QColor('#bc976a'))
         for x, y in ((26, 1), (51, 26), (26, 51), (1, 26)):
             p.drawEllipse(QPointF(x, y), 1.4, 1.4)
+        if self._pulse_started is not None and not self._quiet:
+            progress = min(1., max(0., (time.monotonic() - self._pulse_started) / 1.2))
+            alpha = round(math.sin(progress * math.pi) * (90 if self.day else 105))
+            for i in range(18):
+                colour = QColor('#b4413e' if i % 2 == 0 else '#bc976a')
+                colour.setAlpha(alpha)
+                p.setBrush(colour)
+                p.save()
+                p.translate(26, 26)
+                p.rotate(i * 20 + progress * 12)
+                p.translate(19 + progress * 5, 0)
+                p.drawEllipse(QRectF(-1.8, -.8, 3.6, 1.6))
+                p.restore()
 
 
 class ShrineDivider(QWidget):
@@ -278,6 +351,7 @@ class ChatWindow(QWidget):
         top = QHBoxLayout()
         top.setSpacing(12)
         self.emblem = ShrineEmblem()
+        self.emblem.set_quiet(bool(self.store.focus()))
         top.addWidget(self.emblem)
         title = QVBoxLayout()
         title.setSpacing(2)
@@ -695,6 +769,7 @@ class ChatWindow(QWidget):
     def send_or_stop(self):
         if self.busy():
             self.stopping = True
+            self.emblem.finish(success=False)
             self.worker.requestInterruption()
             self.btn.setEnabled(False)
             self.head.setText('正在停止…')
@@ -760,6 +835,7 @@ class ChatWindow(QWidget):
         self.attach_btn.setEnabled(False)
         self._scroll_bottom(force=True)
         self.head.setText('正在想…')
+        self.emblem.start_waiting()
         self.pet.companion.activity('thinking')
         self.worker = self.worker_cls(query, history)
         self.worker.memory_message_id = "__ephemeral__" if self.ephemeral else self.current_id
@@ -783,6 +859,7 @@ class ChatWindow(QWidget):
             self.pet.companion.activity('searching')
         elif kind == 'error':
             self.had_error = True
+            self.emblem.finish(success=False)
             self.add_bubble(text, 'sys')
 
     def on_done(self):
@@ -809,6 +886,7 @@ class ChatWindow(QWidget):
         self.attach_btn.setEnabled(True)
         self.retry.setVisible(state != 'complete' and self.current_id is not None)
         self.pet.companion.activity('done' if state == 'complete' else 'error')
+        self.emblem.finish(success=state == 'complete')
         self.pet.companion.tick()
         self.refresh_head()
         self.input.setFocus()
@@ -914,6 +992,7 @@ class CompanionController:
         else:
             self.counter.hide()
         if self.pet.chat:
+            self.pet.chat.emblem.set_quiet(quiet)
             self.pet.chat.refresh_head()
 
     def activity(self, state):

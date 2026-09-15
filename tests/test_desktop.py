@@ -179,6 +179,56 @@ class Desktop(unittest.TestCase):
         self.chat.restore()
         self.assertEqual(self.chat.msgs.count(), 3)
 
+    def test_waiting_rotates_then_success_pulses_once(self):
+        FakeWorker.mode = 'wait'
+        self.chat.input.setPlainText('继续方案')
+        self.chat.send()
+        QTest.qWait(100)
+        emblem = self.chat.emblem
+        self.assertTrue(emblem.animation_timer.isActive())
+        self.assertGreater(emblem._angle, 0)
+        self.chat.on_chunk('content', '已经想好了。')
+        self.chat.worker.requestInterruption()
+        self.finish()
+        self.assertFalse(emblem._spinning)
+        self.assertIsNotNone(emblem._pulse_started)
+        QTest.qWait(1300)
+        self.assertIsNone(emblem._pulse_started)
+        self.assertFalse(emblem.animation_timer.isActive())
+
+    def test_cancel_and_error_do_not_play_completion_pulse(self):
+        for mode in ('wait', 'error'):
+            FakeWorker.mode = mode
+            self.chat.input.setPlainText('再试一次')
+            self.chat.send()
+            if mode == 'wait':
+                self.chat.send_or_stop()
+            self.finish()
+            self.assertFalse(self.chat.emblem.animation_timer.isActive())
+            self.assertIsNone(self.chat.emblem._pulse_started)
+
+    def test_quiet_and_hidden_chat_suspend_animation(self):
+        self.chat.input.setPlainText('陪我写半小时')
+        self.chat.send()
+        FakeWorker.mode = 'wait'
+        self.chat.input.setPlainText('稍等想一想')
+        self.chat.send()
+        QTest.qWait(50)
+        self.assertFalse(self.chat.emblem.animation_timer.isActive())
+        self.pet.companion.stop_focus()
+        self.assertTrue(self.chat.emblem.animation_timer.isActive())
+        self.chat.hide()
+        self.assertFalse(self.chat.emblem.animation_timer.isActive())
+        self.chat.show()
+        self.assertTrue(self.chat.emblem.animation_timer.isActive())
+        self.chat.hide()
+        self.chat.on_chunk('content', '完成。')
+        self.chat.worker.requestInterruption()
+        self.finish()
+        self.chat.show()
+        self.assertFalse(self.chat.emblem.animation_timer.isActive())
+        self.assertIsNone(self.chat.emblem._pulse_started)
+
     def test_ime_preedit_hides_placeholder_before_character_commit(self):
         editor = self.chat.input
         self.assertEqual(editor.placeholderText(), '说点什么…')
