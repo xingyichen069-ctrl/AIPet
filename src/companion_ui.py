@@ -386,6 +386,9 @@ class ChatWindow(QWidget):
             paper.setColorAt(0, QColor('#fffaf1' if self._day else '#191e2a'))
             paper.setColorAt(1, QColor('#f5eddf' if self._day else '#121723'))
         p.fillRect(self.rect(), paper)
+        # Keep the heading readable and solid above the glass conversation.
+        p.fillRect(0, 0, self.width(), self.divider.geometry().bottom() + 1,
+                   QColor('#fffaf1' if self._day else '#191e2a'))
         edge = QLinearGradient(0, 0, self.width(), self.height())
         edge.setColorAt(0, QColor(255, 255, 255, 210 if self._day else 90))
         edge.setColorAt(.5, QColor(255, 255, 255, 30))

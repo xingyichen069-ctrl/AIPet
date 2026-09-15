@@ -78,7 +78,7 @@ class NativeGlass:
         self.send(self.window, 'setOpaque:', None, (C.c_bool, False))
         clear = self.send(self.cls('NSColor'), 'clearColor')
         self.send(self.window, 'setBackgroundColor:', None, (C.c_void_p, clear))
-        self.send(self.window, 'setTitlebarAppearsTransparent:', None, (C.c_bool, True))
+        self.send(self.window, 'setTitlebarAppearsTransparent:', None, (C.c_bool, False))
         self.update(day)
         return True
 
