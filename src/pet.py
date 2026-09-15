@@ -344,6 +344,57 @@ def theme() -> dict:
     return PANEL_THEME["day" if is_daytime() else "night"]
 
 
+def QQ_STATUS() -> dict:
+    """
+    读 QQ 桥的连接状态，给右键菜单显示。
+
+    QQ 桥是**另一个进程**（src/qq_bridge.py run），桌宠不拉起它、
+    也不管它死活 —— 只是读一个它写的状态文件。这样 QQ 挂了
+    不会把桌宠带崩，桌宠没开也不影响 QQ。
+
+    进程被 kill 的时候来不及写"我停了"，所以靠时间戳判断新鲜度：
+    超过三分钟没更新就当没在跑。
+    """
+    try:
+        import qq_bot as QB
+        st = QB.read_status()
+    except ImportError:
+        return {"state": "off", "label": "QQ：读不到状态"}
+
+    state = st.get("state", "off")
+    if state == "off":
+        return {**st, "label": "QQ：没在跑"}
+
+    label = {
+        "ready": "QQ：已连接",
+        "connecting": "QQ：连接中…",
+        "open": "QQ：握手中…",
+        "identify": "QQ：握手中…",
+        "resume": "QQ：恢复会话中…",
+        "waiting": f"QQ：重连中（第 {st.get('attempts', 0)} 次）",
+        "reconnect": "QQ：重连中…",
+        "invalid": "QQ：会话失效，重连中…",
+        "closed": "QQ：断开了",
+        "error": "QQ：出错了",
+        "stopped": "QQ：已停止",
+        "fatal": "QQ：出错停了，要处理",
+    }.get(state, f"QQ：{state}")
+
+    if state != "ready" and st.get("detail"):
+        label += f"（{st['detail'][:24]}）"
+
+    if state == "ready":
+        try:
+            import people as P
+            n = len(P.cards())
+            label += f"　·　认得 {n} 人" if n else "　·　还没认到人"
+        except Exception:
+            pass
+
+    st["label"] = label
+    return st
+
+
 def shade(color, day: bool) -> QColor:
     """
     档位颜色在浅底上要压暗，否则 #5eead4 这种亮色在白底上几乎看不见。
@@ -1092,6 +1143,18 @@ class PetWindow(QWidget):
             m.addAction("安静陪伴半小时", self._start_company)
         m.addSeparator()
         m.addAction("打开记忆面板", self._open_memory_view)
+
+        # ── QQ ──────────────────────────────────────────────
+        # 状态从 data/qq_status.json 读。QQ 桥是**独立进程**，
+        # 可能压根没跑 —— 看时间戳就知道它是活的还是被 kill 了。
+        qs = QQ_STATUS()
+        qa = m.addAction(qs["label"])
+        qa.setEnabled(False)
+        if qs["state"] == "ready":
+            m.addAction("查看群里的人", self._show_people)
+        else:
+            off = m.addAction("QQ 没在跑（用 tools/qq_ctl.py start 启动）")
+            off.setEnabled(False)
         advanced = m.addMenu("高级")
         advanced.addAction("显示 / 隐藏思考面板", self._toggle_panel)
         levels = advanced.addMenu("思考强度")
@@ -1117,6 +1180,35 @@ class PetWindow(QWidget):
         m.addSeparator()
         m.addAction("退出", self.quit_safely)
         m.exec(gpos)
+
+    def _show_people(self):
+        """把群里认得的人列出来。纯文本就够，不值得为它做个窗口。"""
+        from PySide6.QtWidgets import QMessageBox
+        try:
+            import people as P
+            cards = P.cards()
+        except ImportError:
+            return
+        if not cards:
+            QMessageBox.information(self, "群里的人", "还没认到任何人。")
+            return
+
+        lines = []
+        owners = set(P.owner_openids())
+        for p in cards[:30]:
+            mark = "★主人 " if (p.get("openid") in owners or p.get("is_owner")) else "      "
+            roles = {s.get("role") for s in p.get("scenes", {}).values() if s.get("role")}
+            role = "管理员" if roles & {"owner", "admin"} else ""
+            lines.append(f"{mark}{P.label(p['openid'])}　见过 {p.get('count', 0)} 次　{role}")
+            if p.get("traits"):
+                lines.append(f"        特点：{'、'.join(p['traits'])}")
+            notes = P.notes_for(p["openid"])
+            if notes:
+                lines.append(f"        刚才：{notes[-1]['text'][:36]}")
+        if len(cards) > 30:
+            lines.append(f"……还有 {len(cards) - 30} 人")
+
+        QMessageBox.information(self, f"群里的人（{len(cards)}）", "\n".join(lines))
 
     def _start_company(self):
         try:

@@ -177,11 +177,17 @@ def load_journal() -> list[dict]:
     if control.exists():
         import sqlite3
         import hashlib
-        with sqlite3.connect(control, timeout=15) as db:
-            try:
-                blocked = set(db.execute("SELECT id,digest FROM excluded_memory"))
-            except sqlite3.OperationalError:
-                blocked = set()
+        # ★ 必须显式 close()。`with sqlite3.connect(...) as db:` 管的是**事务**
+        #   （提交/回滚），不是连接 —— 出了 with 块句柄还开着。
+        #   后果：每调一次 load_journal() 漏一个句柄，一直占着这个文件，
+        #   Windows 上删不掉、改名失败，测试的临时目录清理会报 WinError 32。
+        db = sqlite3.connect(control, timeout=15)
+        try:
+            blocked = set(db.execute("SELECT id,digest FROM excluded_memory"))
+        except sqlite3.OperationalError:
+            blocked = set()
+        finally:
+            db.close()
         out = [e for e in out if (e['id'], hashlib.sha256(e['text'].encode()).hexdigest()) not in blocked]
     return out
 
@@ -289,12 +295,18 @@ def compute_progress(entry: dict, ref: datetime | None = None) -> str:
 
 def add(text: str, importance: int = 3, tags: list[str] | None = None,
         emotion: str = "", decay: str = "normal", source: str = "chat",
-        progress: dict | None = None, speaker: str = "owner") -> dict | None:
+        progress: dict | None = None, speaker: str = "owner",
+        speaker_name: str = "", speaker_role: str = "") -> dict | None:
     """
     写入一条记忆。返回写入的条目，被隐私过滤则返回 None。
 
-    speaker: "owner"（主人，默认）或 "guest"（群里的其他人）。
-    外人记忆会被自动降权、封顶重要度、加速衰减 —— 见 speaker_weight()。
+    speaker:
+        "owner"        主人（默认）
+        "guest"        认不出来的群友
+        "qq:<openid>"  认得出来的群友，见 people.py
+
+    speaker_name / speaker_role 是可选的补充信息（昵称、群内角色），
+    只在 speaker 是具体的人时才有意义。它们有默认值，现有调用方一行不用改。
     """
     if ACTIVE_MESSAGE.get() == "__ephemeral__":
         return None
@@ -310,15 +322,21 @@ def add(text: str, importance: int = 3, tags: list[str] | None = None,
     if decay not in ("permanent", "slow", "normal"):
         decay = "normal"
 
-    is_guest = str(speaker).lower() not in ("owner", "self", "me", "主人")
+    kind = speaker_kind({"speaker": speaker})
     scfg = CFG.get("speaker", {})
 
-    if is_guest:
-        # 外人记忆三重限制，不管调用方传了什么
+    if kind == "guest":
+        # 陌生人三重限制，不管调用方传了什么
         importance = min(int(importance), scfg.get("guest_max_importance", 2))
         # permanent 对外人无效 —— 群友的生日不该被永久记住
         if decay == "permanent":
             decay = "normal"
+    elif kind == "person":
+        # 认得的群友松一档：能记慢衰减，但仍然不永久。
+        # 理由没变 —— 这些不是关于主人的事实，不该跟他自己的争位置。
+        importance = min(int(importance), scfg.get("known_guest_max_importance", 3))
+        if decay == "permanent":
+            decay = "slow"
 
     entries = load_journal()
     entry = {
@@ -330,12 +348,17 @@ def add(text: str, importance: int = 3, tags: list[str] | None = None,
         "emotion": emotion,
         "decay": decay,
         "source": source,
-        "speaker": "guest" if is_guest else "owner",
+        # 归一化：owner 的几种写法都收成 "owner"；person 原样存 openid（身份不能丢）。
+        "speaker": {"owner": "owner", "person": str(speaker)}.get(kind, "guest"),
     }
     if ACTIVE_MESSAGE.get():
         entry["message_id"] = ACTIVE_MESSAGE.get()
     if progress:
         entry["progress"] = progress
+    if speaker_name:
+        entry["speaker_name"] = speaker_name
+    if speaker_role:
+        entry["speaker_role"] = speaker_role
     append_journal(entry)
 
     # 同步更新关系状态
@@ -365,8 +388,13 @@ def _keyword_score(entry_toks: set[str], query_toks: set[str]) -> float:
 def _recency_factor(entry: dict, ref: datetime) -> float:
     # 外人的记忆走独立衰减曲线 —— 群里的闲聊一周左右就该淡出，
     # 不该跟主人的记忆用同一条时间线。
-    if entry.get("speaker", "owner") == "guest":
-        lam = CFG.get("speaker", {}).get("guest_decay", 0.15)
+    # 认得的群友慢一档（半衰期约 11.5 天）：他反复出现，值得记住久一点。
+    scfg = CFG.get("speaker", {})
+    kind = speaker_kind(entry)
+    if kind == "guest":
+        lam = scfg.get("guest_decay", 0.15)
+    elif kind == "person":
+        lam = scfg.get("known_guest_decay", 0.06)
     else:
         lam = CFG["scoring"]["decay_lambda"].get(entry.get("decay", "normal"), 0.02)
     if lam <= 0:
@@ -550,8 +578,14 @@ def build_context(query: str, query_tags: list[str] | None = None) -> str:
             # 这不是权重问题 —— 群里有人报自己的生日，被记成"用户的生日"
             # 就是彻头彻尾的错。
             who = ""
-            if mark_guest and e.get("speaker", "owner") == "guest":
-                who = "［群里有人说的，不是主人］ "
+            # 认得出来的人就点名，认不出的说"有人"。
+            if mark_guest:
+                k = speaker_kind(e)
+                if k == "person":
+                    nm = e.get("speaker_name") or "某个群友"
+                    who = f"［群里「{nm}」说的，不是主人］ "
+                elif k == "guest":
+                    who = "［群里有人说的，不是主人］ "
             parts.append(f"- [{when}] {who}{e['text']}{extra} {mark}{tag}")
     else:
         parts.append("- （没有相关记忆）")

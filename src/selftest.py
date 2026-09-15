@@ -325,6 +325,82 @@ def test_mood_triggers():
 
 # ═══════════════════════════════════════════════════════════════
 
+def test_speaker_states():
+    section("说话人三态 + 写锁")
+
+    K = M.speaker_kind
+    check("老条目没 speaker 字段 → owner", K({}) == "owner")
+    check("显式 null → owner", K({"speaker": None}) == "owner")
+    check("空串 → owner", K({"speaker": ""}) == "owner")
+    check('"guest" → guest', K({"speaker": "guest"}) == "guest")
+    check("认不出的值 → guest", K({"speaker": "张三"}) == "guest")
+    check("qq:<openid> → person", K({"speaker": "qq:ABC123"}) == "person")
+
+    w = lambda **kw: M.speaker_weight(kw)          # noqa: E731
+    check("owner 权重最高",
+          w(speaker="owner") > w(speaker="qq:A") > w(speaker="guest"),
+          f"{w(speaker='owner')} > {w(speaker='qq:A')} > {w(speaker='guest')}")
+
+    # 封顶：三种身份对 importance / decay 的处理各不相同
+    import inspect
+    src = inspect.getsource(M.add)
+    check("陌生人 permanent 降级", 'decay = "normal"' in src)
+    check("认得的人 permanent 只降到 slow", 'decay = "slow"' in src)
+    check("认得的人重要度封顶更松",
+          M.CFG["speaker"]["known_guest_max_importance"]
+          > M.CFG["speaker"]["guest_max_importance"])
+
+    # 写锁：并发写不能撞 id
+    import threading
+    before = len(M.load_journal())
+    ids: list[str] = []
+    lock = threading.Lock()
+
+    def writer(n):
+        for i in range(5):
+            e = M.add(f"并发测试 {n}-{i}", 1, ["_test"], source="_test")
+            if e:
+                with lock:
+                    ids.append(e["id"])
+
+    ts = [threading.Thread(target=writer, args=(n,)) for n in range(4)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+
+    dupes = len(ids) - len(set(ids))
+    check("并发 20 条无重复 id", dupes == 0, f"{len(ids)} 条，{dupes} 个重复")
+    check("条数对得上", len(M.load_journal()) == before + len(ids),
+          f"{before} → {len(M.load_journal())}")
+
+    # 收尾：把测试写入的条目删掉
+    kept = [e for e in M.load_journal() if e.get("source") != "_test"]
+    M.save_journal(kept)
+    check("测试数据已清干净",
+          not any(e.get("source") == "_test" for e in M.load_journal()))
+
+
+def test_qq_modules() -> None:
+    """QQ 那四个模块各自的自检，跑在子进程里。"""
+    import subprocess
+    section("QQ 模块（子进程）")
+
+    for mod in ("qq_text", "people", "qq_bot", "qq_bridge"):
+        try:
+            r = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve().parent / f"{mod}.py"),
+                 "selftest"],
+                capture_output=True, text=True, timeout=180,
+                encoding="utf-8", errors="replace",
+            )
+            ok = r.returncode == 0 and "全部通过" in (r.stdout or "")
+            last = [ln for ln in (r.stdout or "").splitlines() if ln.strip()]
+            check(f"{mod}.py 自检", ok, last[-1].strip() if last else "无输出")
+        except (subprocess.TimeoutExpired, OSError) as e:
+            check(f"{mod}.py 自检", False, f"{type(e).__name__}: {e}")
+
+
 def main() -> None:
     print("记忆系统自检")
     print("=" * 58)
@@ -337,6 +413,10 @@ def main() -> None:
     test_context()
     test_mood()
     test_mood_triggers()
+    test_speaker_states()
+
+    if "--all" in sys.argv:
+        test_qq_modules()
 
     print("\n" + "=" * 58)
     if _fails:

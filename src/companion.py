@@ -33,6 +33,9 @@ def read_attachment(path):
             continue
     else:
         raise ValueError('无法识别文件编码，请另存为 UTF-8 文本。')
+    # ★ 归一化换行。这里是二进制读的，所以记事本存的 .txt 会带着 \r\n。
+    #   不处理的话整份材料混进 \r，白烧 token；而且 Windows 和 macOS 写出来的文件读回来不一样。
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
     if not text.strip():
         raise ValueError('这份文件是空的。')
     if len(text) > MAX_ATTACHMENT_CHARS:

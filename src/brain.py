@@ -270,7 +270,8 @@ def _explain(e: Exception) -> str:
 
 
 def stream(query: str, history: list[dict] | None = None,
-           level: str | None = None, cancelled=None):
+           level: str | None = None, cancelled=None,
+           system: str | None = None, max_tokens: int | None = None):
     """
     流式生成。产出 (类型, 文本)：
         ("level", 档位信息)  —— 只产一次，最先
@@ -284,6 +285,12 @@ def stream(query: str, history: list[dict] | None = None,
         return
 
     payload, r = build_payload(query, history, level, stream=True)
+    # QQ 那条路的覆盖口：群聊要自带更短的 system，而且必须在**调用之前**
+    # 就把 max_tokens 压下来 —— 被动回复只有 5 分钟，生成完再截断时间已经花掉了。
+    if system is not None:
+        payload["messages"][0] = {"role": "system", "content": system}
+    if max_tokens is not None:
+        payload["max_tokens"] = int(max_tokens)
     yield ("level", r)
 
     messages = list(payload["messages"])
@@ -414,6 +421,39 @@ def ask(query: str, history: list[dict] | None = None,
     tools_used: list[str] = []
 
     for kind, val in stream(query, history, level):
+        if kind == "content":
+            text.append(val)
+        elif kind == "reasoning":
+            reasoning.append(val)
+        elif kind == "level":
+            r = val
+        elif kind == "tool":
+            tools_used.append(val)
+        elif kind == "error":
+            r = {**r, "error": val}
+
+    if tools_used:
+        r = {**r, "tools": tools_used}
+    return "".join(text), "".join(reasoning), r
+
+
+def ask_with_system(query: str, system: str,
+                    history: list[dict] | None = None,
+                    level: str | None = None,
+                    max_tokens: int | None = None) -> tuple[str, str, dict]:
+    """
+    自带 system 地问一次。返回 (正文, 思维链, 档位信息)。
+
+    给 QQ 那条路用的 —— 那边的 system 和桌宠不一样（更短、带平台限制说明）。
+    和 ask() 一样走 stream()，这样工具调用、停止回调、错误处理只有一份实现。
+    """
+    text: list[str] = []
+    reasoning: list[str] = []
+    r: dict = {}
+    tools_used: list[str] = []
+
+    for kind, val in stream(query, history, level,
+                            system=system, max_tokens=max_tokens):
         if kind == "content":
             text.append(val)
         elif kind == "reasoning":
