@@ -17,6 +17,7 @@ import test_companion as TC
 import companion as C
 import companion_ui as UI
 import ui_theme
+from desktop_state import DesktopState, write_json
 
 APP = QApplication.instance() or QApplication([])
 
@@ -84,6 +85,90 @@ class Desktop(unittest.TestCase):
                 APP.processEvents()
                 return
         self.fail('Worker did not finish')
+
+    def reopen_chat(self):
+        self.chat.prepare_quit()
+        self.chat.hide()
+        self.chat.deleteLater()
+        APP.processEvents()
+        self.chat = UI.ChatWindow(self.pet, FakeWorker)
+        self.pet.chat = self.chat
+        self.chat.show()
+        QTest.qWait(30)
+
+    def test_draft_and_attachment_snapshot_survive_restart(self):
+        self.chat.input.setPlainText('还没写完的草稿')
+        self.chat.input.moveCursor(UI.QTextCursor.Start)
+        material = self.root / '材料.md'
+        material.write_text('原始材料', encoding='utf-8')
+        self.chat.load_attachment(material)
+        material.unlink()
+        QTest.qWait(350)
+        saved = DesktopState(self.root)
+        self.assertEqual(saved.data['drafts'][self.store.session()]['text'], '还没写完的草稿')
+        self.assertEqual(saved.path.stat().st_mode & 0o777, 0o600)
+        self.reopen_chat()
+        self.assertEqual(self.chat.input.toPlainText(), '还没写完的草稿')
+        self.assertEqual(self.chat.input.textCursor().position(), 0)
+        self.assertEqual(self.chat.attachment, {'name': '材料.md', 'text': '原始材料'})
+
+    def test_sent_message_does_not_return_as_draft(self):
+        self.chat.input.setPlainText('今天继续写方案')
+        self.chat.send()
+        self.finish()
+        self.reopen_chat()
+        self.assertEqual(self.chat.input.toPlainText(), '')
+        self.assertIsNone(self.chat.attachment)
+
+    def test_topics_keep_separate_drafts(self):
+        self.chat.input.setPlainText('第一个话题的草稿')
+        self.chat.new_topic()
+        self.assertEqual(self.chat.input.toPlainText(), '')
+        self.chat.input.setPlainText('第二个话题的草稿')
+        with patch.object(UI.QInputDialog, 'getItem', side_effect=lambda *args: (args[3][-1], True)):
+            self.chat.old_topics()
+        self.assertEqual(self.chat.input.toPlainText(), '第一个话题的草稿')
+        self.assertEqual(len(DesktopState(self.root).data['drafts']), 2)
+
+    def test_window_layout_and_open_state_survive_quit(self):
+        self.chat.resize(440, 550)
+        self.chat.move(100, 110)
+        QTest.qWait(300)
+        position, size = self.chat.pos(), self.chat.size()
+        self.assertTrue(DesktopState(self.root).data['layout']['open'])
+        self.reopen_chat()
+        self.assertEqual(self.chat.pos(), position)
+        self.assertEqual(self.chat.size(), size)
+        self.chat.close()
+        self.assertFalse(DesktopState(self.root).data['layout']['open'])
+
+    def test_live_preferences_preserve_draft_and_apply_immediately(self):
+        self.chat.input.setPlainText('调整外观时保留这段草稿')
+        self.chat.change_appearance('font_size', 17)
+        self.chat.change_appearance('glass_opacity', .4)
+        QTest.qWait(30)
+        self.assertEqual(self.chat.input.font().pixelSize(), 17)
+        self.assertEqual(self.chat.appearance.settings['glass_opacity'], .4)
+        self.assertEqual(self.chat.input.toPlainText(), '调整外观时保留这段草稿')
+        self.reopen_chat()
+        self.assertEqual(self.chat.appearance.settings['font_size'], 17)
+        self.assertEqual(self.chat.input.toPlainText(), '调整外观时保留这段草稿')
+
+    def test_external_theme_changes_reload_after_atomic_replace(self):
+        with patch.object(UI, 'is_daytime', return_value=True):
+            self.chat._refresh_theme(force=True)
+            path = self.chat.appearance.overrides
+            write_json(path, {'day': {'top': '#fff0dc'}, 'font_size': 15})
+            QTest.qWait(700)
+            self.assertEqual(self.chat.appearance.palette(True)['top'], '#fff0dc')
+            frame = self.chat.grab().toImage()
+            self.assertEqual(frame.pixelColor(10, 40).name(), '#fff0dc')
+            path.write_text('{invalid', encoding='utf-8')
+            QTest.qWait(700)
+            self.assertEqual(self.chat.appearance.palette(True)['top'], '#fff0dc')
+            write_json(path, {'day': {'top': '#fffaf1'}, 'font_size': 13})
+            QTest.qWait(700)
+            self.assertEqual(self.chat.appearance.palette(True)['top'], '#fffaf1')
 
     def test_stream_and_restart_show_both_messages(self):
         self.chat.input.setPlainText('蓝鲸方案继续')

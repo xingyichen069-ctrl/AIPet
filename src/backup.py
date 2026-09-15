@@ -41,6 +41,8 @@ KEEP = 30                      # auto 模式保留最近多少个
 # 真正需要备份的东西。assets/ view/ 都是可再生的，不备。
 SOURCES = [
     ("data", "companion.sqlite3"),  # 对话、约定和记忆撤销记录
+    ("data", "desktop_ui.json"),  # 分话题草稿、附件快照、窗口布局
+    ("data", "appearance.json"),  # 本机外观偏好
 
     ("persona", "*.md"),
     ("memory", "*.jsonl"),

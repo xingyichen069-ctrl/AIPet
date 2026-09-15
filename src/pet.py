@@ -1243,8 +1243,10 @@ def main() -> None:
         pet.tray.setToolTip("小日和")
         pet.tray.show()
 
-    if "--show-chat" in sys.argv:
-        QTimer.singleShot(350, pet.reveal)
+    from desktop_state import DesktopState
+    saved_layout = DesktopState(ROOT).data.get('layout', {})
+    if "--show-chat" in sys.argv or (isinstance(saved_layout, dict) and saved_layout.get('open')):
+        QTimer.singleShot(350, pet.open_chat)
         def report_visibility():
             print("[desktop]", {
                 "app_state": app.applicationState().name,

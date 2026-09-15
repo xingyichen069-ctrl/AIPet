@@ -99,7 +99,8 @@ class NativeGlass:
         appearance = self.send(self.cls('NSAppearance'), 'appearanceNamed:', C.c_void_p, (C.c_void_p, name))
         self.send(self.window, 'setAppearance:', None, (C.c_void_p, appearance))
         self.send(self.effect, 'setAppearance:', None, (C.c_void_p, appearance))
-        colour = touhou_palette(day)['top'].lstrip('#')
+        palette = self.widget.appearance.palette(day) if hasattr(self.widget, 'appearance') else touhou_palette(day)
+        colour = palette['top'].lstrip('#')
         components = [int(colour[i:i+2], 16) / 255 for i in (0, 2, 4)]
         solid = self.send(self.cls('NSColor'), 'colorWithSRGBRed:green:blue:alpha:', C.c_void_p,
                           *((C.c_double, v) for v in (*components, 1.0)))

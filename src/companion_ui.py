@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 import sys
 import time
-from PySide6.QtCore import Qt, QTimer, Signal, QUrl, QRectF, QPointF
+from PySide6.QtCore import Qt, QTimer, Signal, QUrl, QRectF, QPointF, QByteArray
 from PySide6.QtGui import (QDesktopServices, QKeySequence, QShortcut, QTextCursor,
     QPainter, QColor, QPen, QPainterPath, QLinearGradient, QPalette)
 from PySide6.QtWidgets import (QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
@@ -15,6 +15,7 @@ import companion as C
 import memory as M
 from ui_theme import is_daytime, touhou_palette
 from native_glass import NativeGlass
+from desktop_state import DesktopState, Appearance
 
 STYLE = '''
 QWidget { color:#423936; font-size:13px; font-weight:400; }
@@ -236,6 +237,18 @@ class ChatWindow(QWidget):
         super().__init__()
         self.pet, self.worker_cls = pet, worker_cls
         self.store = pet.companion.store
+        self._ui_ready = False
+        self._closing_application = False
+        self._ui_open = False
+        self._save_error = False
+        root = self.store.path.parent.parent
+        self.desktop_state = DesktopState(root)
+        self.appearance = Appearance(root, self)
+        self._draft_session = self.store.session()
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(250)
+        self._save_timer.timeout.connect(self._flush_ui)
         self.worker = None
         self.attachment = None
         self.cur_reply = []
@@ -257,7 +270,7 @@ class ChatWindow(QWidget):
         self.resize(490, 650)
         self.setMinimumSize(390, 460)
         self._day = is_daytime()
-        self.setStyleSheet(glass_style(self._day))
+        self.setStyleSheet(self.appearance.stylesheet(glass_style(self._day), self._day))
         self.setAcceptDrops(True)
         v = QVBoxLayout(self)
         v.setContentsMargins(18, 17, 18, 12)
@@ -340,13 +353,96 @@ class ChatWindow(QWidget):
         self._theme_timer.timeout.connect(self._refresh_theme)
         self._theme_timer.start(60_000)
         self._refresh_theme(force=True)
+        self._restore_layout()
+        self._restore_draft()
+        self._ui_ready = True
+        self.input.textChanged.connect(self._schedule_save)
+        self.input.cursorPositionChanged.connect(self._schedule_save)
+        self.appearance.changed.connect(lambda: self._refresh_theme(force=True))
+        QApplication.instance().aboutToQuit.connect(self.prepare_quit)
+
+    def _schedule_save(self):
+        if self._ui_ready:
+            self._save_timer.start()
+
+    def _flush_ui(self):
+        if not self._ui_ready:
+            return
+        self._save_timer.stop()
+        data = self.desktop_state.data
+        drafts = data.setdefault('drafts', {})
+        if not isinstance(drafts, dict):
+            drafts = data['drafts'] = {}
+        cursor = self.input.textCursor()
+        text = self.input.toPlainText()
+        if text or self.attachment:
+            drafts[self._draft_session] = {'text': text, 'attachment': self.attachment,
+                                           'cursor': cursor.position(), 'anchor': cursor.anchor()}
+        else:
+            drafts.pop(self._draft_session, None)
+        data['layout'] = {'geometry': bytes(self.saveGeometry().toBase64()).decode('ascii'),
+                          'open': self._ui_open}
+        try:
+            self.desktop_state.save()
+            self._save_error = False
+            self.input.setToolTip('草稿和附件自动保存在本机')
+        except OSError:
+            if not self._save_error:
+                print('[desktop] Unable to save draft/layout', flush=True)
+            self._save_error = True
+            self.input.setToolTip('草稿暂时无法保存，请先保留文字再退出')
+
+    def _restore_draft(self):
+        self._draft_session = self.store.session()
+        drafts = self.desktop_state.data.get('drafts', {})
+        draft = drafts.get(self._draft_session, {}) if isinstance(drafts, dict) else {}
+        if not isinstance(draft, dict):
+            draft = {}
+        self.input.setPlainText(draft.get('text', '') if isinstance(draft.get('text', ''), str) else '')
+        self.attachment = draft.get('attachment')
+        if not (isinstance(self.attachment, dict)
+                and all(isinstance(self.attachment.get(k), str) for k in ('name', 'text'))):
+            self.attachment = None
+        self.attachment_btn.setVisible(bool(self.attachment))
+        if self.attachment:
+            self.attachment_btn.setText('材料：' + self.attachment['name'] + '  ×')
+        cursor = self.input.textCursor()
+        for key, mode in (('anchor', QTextCursor.MoveAnchor), ('cursor', QTextCursor.KeepAnchor)):
+            value = draft.get(key, 0)
+            if isinstance(value, int):
+                cursor.setPosition(max(0, min(value, self.input.document().characterCount()-1)), mode)
+        self.input.setTextCursor(cursor)
+
+    def _restore_layout(self):
+        layout = self.desktop_state.data.get('layout', {})
+        encoded = layout.get('geometry') if isinstance(layout, dict) else None
+        if isinstance(encoded, str) and self.restoreGeometry(QByteArray.fromBase64(encoded.encode('ascii', errors='ignore'))):
+            self.setWindowState(self.windowState() & ~Qt.WindowMinimized)
+            return
+        area = (self.pet.screen() or QApplication.primaryScreen()).availableGeometry()
+        self.move(max(area.left(), min(self.pet.x()+self.pet.width()+20, area.right()-self.width()+1)),
+                  max(area.top(), min(self.pet.y(), area.bottom()-self.height()+1)))
+
+    def prepare_quit(self):
+        self._closing_application = True
+        self._flush_ui()
+
+    def hideEvent(self, event):
+        if self._ui_ready and not self._closing_application and not self.isMinimized():
+            self._ui_open = False
+            self._flush_ui()
+        super().hideEvent(event)
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        self._schedule_save()
 
     def _refresh_theme(self, force=False):
         day = is_daytime()
         if not force and day == self._day:
             return
         self._day = day
-        self.setStyleSheet(glass_style(day))
+        self.setStyleSheet(self.appearance.stylesheet(glass_style(day), day))
         self._glass.update(day)
         palette = self.input.palette()
         palette.setColor(QPalette.PlaceholderText, QColor('#806d63' if day else '#b5a69c'))
@@ -360,6 +456,8 @@ class ChatWindow(QWidget):
         self._refresh_theme()
         super().showEvent(event)
         QTimer.singleShot(0, self._install_glass)
+        self._ui_open = True
+        self._schedule_save()
 
     def _install_glass(self):
         try:
@@ -373,16 +471,21 @@ class ChatWindow(QWidget):
         super().resizeEvent(event)
         if hasattr(self, '_glass'):
             self._glass.resize()
+        self._schedule_save()
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         paper = QLinearGradient(0, 0, self.width(), self.height())
-        colours = touhou_palette(self._day)
+        colours = self.appearance.palette(self._day)
+        def tint(key, alpha):
+            colour = QColor(colours[key])
+            colour.setAlpha(self.appearance.alpha(alpha))
+            return colour
         if self._glass_ready:
-            paper.setColorAt(0, QColor(255, 250, 241, 175) if self._day else QColor(25, 30, 42, 175))
-            paper.setColorAt(.45, QColor(251, 245, 234, 130) if self._day else QColor(22, 27, 39, 130))
-            paper.setColorAt(1, QColor(245, 237, 223, 160) if self._day else QColor(18, 23, 35, 160))
+            paper.setColorAt(0, tint('top', 175))
+            paper.setColorAt(.45, tint('top', 130))
+            paper.setColorAt(1, tint('bottom', 160))
         else:
             paper.setColorAt(0, QColor(colours['top']))
             paper.setColorAt(1, QColor(colours['bottom']))
@@ -514,15 +617,33 @@ class ChatWindow(QWidget):
         a = menu.addAction('以前的话题', self.old_topics)
         a.setEnabled(not self.busy())
         menu.addAction('查看约定', self.pet.companion.show_tasks)
+        appearance_menu = menu.addMenu('外观')
+        for title, key, choices in (
+            ('字号', 'font_size', [('标准', 13), ('大一点', 15), ('更大', 17)]),
+            ('玻璃质感', 'glass_opacity', [('清晰', .85), ('柔和', .65), ('通透', .4)]),
+        ):
+            submenu = appearance_menu.addMenu(title)
+            for label, value in choices:
+                action = submenu.addAction(label, lambda _=False, k=key, v=value: self.change_appearance(k, v))
+                action.setCheckable(True)
+                action.setChecked(self.appearance.settings.get(key) == value)
         if self.store.focus():
             menu.addAction('结束陪伴', self.pet.companion.stop_focus)
         menu.exec(self.mapToGlobal(self.rect().topRight()))
 
+    def change_appearance(self, key, value):
+        try:
+            self.appearance.choose(key, value)
+        except OSError:
+            QMessageBox.information(self, '外观', '外观设置暂时无法保存，请稍后再试。')
+
     def new_topic(self):
         if self.busy():
             return
+        self._flush_ui()
         self.store.session(new=True)
         self.restore()
+        self._restore_draft()
         self.add_bubble('新话题开始了。以前的对话仍可在菜单中找回。', 'sys')
 
     def old_topics(self):
@@ -535,10 +656,12 @@ class ChatWindow(QWidget):
         labels = [f'{i+1}. {label}' for i, label in enumerate(labels)]
         choice, ok = QInputDialog.getItem(self, '以前的话题', '选择要继续的话题：', labels, 0, False)
         if ok:
+            self._flush_ui()
             with self.store.db() as db:
                 db.execute('UPDATE sessions SET active=0')
                 db.execute('UPDATE sessions SET active=1 WHERE id=?', (sessions[labels.index(choice)]['id'],))
             self.restore()
+            self._restore_draft()
 
     def choose_attachment(self):
         path, _ = QFileDialog.getOpenFileName(self, '选择材料', '', '文本材料 (*.txt *.text *.md *.markdown)')
@@ -552,12 +675,14 @@ class ChatWindow(QWidget):
             self.attachment = C.read_attachment(path)
             self.attachment_btn.setText('材料：' + self.attachment['name'] + '  ×')
             self.attachment_btn.show()
+            self._flush_ui()
         except (ValueError, OSError) as e:
             QMessageBox.information(self, '材料', str(e))
 
     def remove_attachment(self):
         self.attachment = None
         self.attachment_btn.hide()
+        self._flush_ui()
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -601,6 +726,7 @@ class ChatWindow(QWidget):
                 self.add_bubble('记忆操作', 'sys')
             self.add_bubble(result)
             self.pet.companion.tick()
+            self._flush_ui()
             return
         history = self.store.history(q)
         context = C.material_query(q, self.attachment)
