@@ -170,7 +170,7 @@ def install() -> int:
     icon = ROOT / "assets" / "character.ico"
 
     # ★ 走临时 .ps1 文件，不用 -Command 拼字符串。
-    #   用户名里有单引号（C:\Users\l'x\…）会把 PowerShell 的
+    #   Windows 用户名里可能有单引号（比如 O'Brien），那会把 PowerShell 的
     #   单引号字符串直接截断，报"方法调用中缺少 )"。
     #   文件还能写成 UTF-8 BOM，中文路径也不会乱码。
     def q(s: Path | str) -> str:
@@ -179,7 +179,7 @@ def install() -> int:
     lines = [
         "$s = (New-Object -ComObject WScript.Shell).CreateShortcut(%s)" % q(LNK),
         "$s.TargetPath = %s" % q(_python()),
-        # 参数里的路径带空格（D:\CXY\AIPet 没空格，但不能赌）
+        # 参数里的路径带空格（装到哪都可能带，不能赌）
         "$s.Arguments = '\"%s\" run'" % BRIDGE,
         "$s.WorkingDirectory = %s" % q(ROOT),
         "$s.Description = '小日和的 QQ 接入'",
