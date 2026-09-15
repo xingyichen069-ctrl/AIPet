@@ -13,13 +13,13 @@ from PySide6.QtWidgets import (QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxL
 
 import companion as C
 import memory as M
-from ui_theme import is_daytime
+from ui_theme import is_daytime, touhou_palette
 from native_glass import NativeGlass
 
 STYLE = '''
 QWidget { color:#423936; font-size:13px; font-weight:400; }
 QDialog { background:#fbf7ef; }
-QLabel#chatTitle { color:#4a2929; font-size:19px; font-weight:600; background:transparent; }
+QLabel#chatTitle { color:#993934; font-size:19px; font-weight:600; background:transparent; }
 QLabel#chatSubtitle { color:#8a6156; font-size:11px; background:transparent; }
 QLabel#composerHint { color:#806d63; font-size:10px; background:transparent; }
 QLabel#userBubble { background:#f6e5df; color:#5a3432; border:1px solid #e9c9be;
@@ -57,7 +57,7 @@ NIGHT_STYLE = '''
 QWidget { color:#eee5dc; }
 QDialog { background:#191e2a; }
 QLabel#chatTitle { color:#f3e4d6; }
-QLabel#chatSubtitle { color:#d0aa99; }
+QLabel#chatSubtitle { color:#d5b781; }
 QLabel#composerHint { color:#b5a69c; }
 QLabel#userBubble { background:#3b2d35; color:#f5ded5; border-color:#62424b; }
 QLabel#petBubble { background:#222937; border-color:#39414e; border-left-color:#c86760; }
@@ -378,17 +378,19 @@ class ChatWindow(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         paper = QLinearGradient(0, 0, self.width(), self.height())
+        colours = touhou_palette(self._day)
         if self._glass_ready:
             paper.setColorAt(0, QColor(255, 250, 241, 175) if self._day else QColor(25, 30, 42, 175))
             paper.setColorAt(.45, QColor(251, 245, 234, 130) if self._day else QColor(22, 27, 39, 130))
             paper.setColorAt(1, QColor(245, 237, 223, 160) if self._day else QColor(18, 23, 35, 160))
         else:
-            paper.setColorAt(0, QColor('#fffaf1' if self._day else '#191e2a'))
-            paper.setColorAt(1, QColor('#f5eddf' if self._day else '#121723'))
+            paper.setColorAt(0, QColor(colours['top']))
+            paper.setColorAt(1, QColor(colours['bottom']))
         p.fillRect(self.rect(), paper)
         # Keep the heading readable and solid above the glass conversation.
         p.fillRect(0, 0, self.width(), self.divider.geometry().bottom() + 1,
-                   QColor('#fffaf1' if self._day else '#191e2a'))
+                   QColor(colours['top']))
+        p.fillRect(0, 0, self.width(), 3, QColor(colours['vermilion']))
         edge = QLinearGradient(0, 0, self.width(), self.height())
         edge.setColorAt(0, QColor(255, 255, 255, 210 if self._day else 90))
         edge.setColorAt(.5, QColor(255, 255, 255, 30))

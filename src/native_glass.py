@@ -2,6 +2,7 @@
 import ctypes as C
 import platform
 import sys
+from ui_theme import touhou_palette
 
 
 class Point(C.Structure):
@@ -20,6 +21,7 @@ class NativeGlass:
     def __init__(self, widget):
         self.widget = widget
         self.view = self.window = self.effect = None
+        self.titlebar = None
         self.kind = 'fallback'
         from PySide6.QtWidgets import QApplication
         if sys.platform != 'darwin' or QApplication.platformName() != 'cocoa':
@@ -41,14 +43,15 @@ class NativeGlass:
     def cls(self, name):
         return self.objc.objc_getClass(name.encode())
 
-    def frame(self):
-        selector = self.objc.sel_registerName(b'frame')
+    def frame(self, view=None, selector_name='frame'):
+        target = view or self.view
+        selector = self.objc.sel_registerName(selector_name.encode())
         if platform.machine() == 'x86_64':
             value = Rect()
             call = C.CFUNCTYPE(None, C.POINTER(Rect), C.c_void_p, C.c_void_p)(('objc_msgSend_stret', self.objc))
-            call(C.byref(value), self.view, selector)
+            call(C.byref(value), target, selector)
             return value
-        return self.send(self.view, 'frame', Rect)
+        return self.send(target, selector_name, Rect)
 
     def install(self, day):
         if not hasattr(self, 'objc'):
@@ -78,7 +81,13 @@ class NativeGlass:
         self.send(self.window, 'setOpaque:', None, (C.c_bool, False))
         clear = self.send(self.cls('NSColor'), 'clearColor')
         self.send(self.window, 'setBackgroundColor:', None, (C.c_void_p, clear))
-        self.send(self.window, 'setTitlebarAppearsTransparent:', None, (C.c_bool, False))
+        # A solid backing colours the native title bar while its controls stay above it.
+        self.titlebar = self.send(self.send(self.cls('NSView'), 'alloc'), 'initWithFrame:',
+                                  C.c_void_p, (Rect, Rect()))
+        self.send(self.titlebar, 'setWantsLayer:', None, (C.c_bool, True))
+        self.send(parent, 'addSubview:positioned:relativeTo:', None,
+                  (C.c_void_p, self.titlebar), (C.c_long, -1), (C.c_void_p, self.view))
+        self.send(self.window, 'setTitlebarAppearsTransparent:', None, (C.c_bool, True))
         self.update(day)
         return True
 
@@ -90,13 +99,35 @@ class NativeGlass:
         appearance = self.send(self.cls('NSAppearance'), 'appearanceNamed:', C.c_void_p, (C.c_void_p, name))
         self.send(self.window, 'setAppearance:', None, (C.c_void_p, appearance))
         self.send(self.effect, 'setAppearance:', None, (C.c_void_p, appearance))
+        colour = touhou_palette(day)['top'].lstrip('#')
+        components = [int(colour[i:i+2], 16) / 255 for i in (0, 2, 4)]
+        solid = self.send(self.cls('NSColor'), 'colorWithSRGBRed:green:blue:alpha:', C.c_void_p,
+                          *((C.c_double, v) for v in (*components, 1.0)))
+        layer = self.send(self.titlebar, 'layer')
+        self.send(layer, 'setBackgroundColor:', None, (C.c_void_p, self.send(solid, 'CGColor')))
+        if self.kind == 'liquid-glass':
+            tint = self.send(self.cls('NSColor'), 'colorWithSRGBRed:green:blue:alpha:', C.c_void_p,
+                             *((C.c_double, v) for v in (*components, .12)))
+            self.send(self.effect, 'setTintColor:', None, (C.c_void_p, tint))
         self.resize()
 
     def resize(self):
         if self.effect:
-            self.send(self.effect, 'setFrame:', None, (Rect, self.frame()))
+            content = self.frame()
+            self.send(self.effect, 'setFrame:', None, (Rect, content))
+            if self.titlebar:
+                parent = self.send(self.view, 'superview')
+                bounds = self.frame(parent, 'bounds')
+                y = content.origin.y + content.size.height
+                title = Rect(Point(bounds.origin.x, y),
+                             Size(bounds.size.width, max(0, bounds.origin.y + bounds.size.height - y)))
+                self.send(self.titlebar, 'setFrame:', None, (Rect, title))
 
     def dispose(self):
+        if self.titlebar:
+            self.send(self.titlebar, 'removeFromSuperview', None)
+            self.send(self.titlebar, 'release', None)
+            self.titlebar = None
         if self.effect:
             self.send(self.effect, 'removeFromSuperview', None)
             self.send(self.effect, 'release', None)
