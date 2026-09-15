@@ -6,7 +6,7 @@ import re
 import tempfile
 
 from PySide6.QtCore import QObject, QFileSystemWatcher, QTimer, Signal
-from ui_theme import touhou_palette
+from ui_theme import touhou_palette, character_palette, theme_roles, THEME_NAMES
 
 
 def read_json(path):
@@ -67,7 +67,7 @@ class Appearance(QObject):
         self.reload()
 
     def reload(self):
-        candidate = {'font_size': 13, 'glass_opacity': .65,
+        candidate = {'theme': 'touhou', 'font_size': 13, 'glass_opacity': .65,
                      'day': dict(touhou_palette(True)), 'night': dict(touhou_palette(False))}
         for path in (self.defaults, self.overrides):
             if not path.exists():
@@ -76,6 +76,13 @@ class Appearance(QObject):
                 layer = json.loads(path.read_text(encoding='utf-8'))
                 if not isinstance(layer, dict):
                     raise ValueError('Appearance must be an object')
+                if 'theme' in layer:
+                    theme = layer['theme']
+                    if theme not in THEME_NAMES:
+                        raise ValueError('Unknown theme')
+                    candidate['theme'] = theme
+                    candidate['day'] = character_palette(theme, True)
+                    candidate['night'] = character_palette(theme, False)
                 for key in ('day', 'night'):
                     for token, colour in layer.get(key, {}).items():
                         if token in candidate[key] and re.fullmatch(r'#[0-9a-fA-F]{6}', str(colour)):
@@ -106,8 +113,10 @@ class Appearance(QObject):
             self.watcher.addPaths(paths)
 
     def choose(self, key, value):
-        if key not in ('font_size', 'glass_opacity'):
+        if key not in ('theme', 'font_size', 'glass_opacity'):
             raise ValueError('Unknown appearance preference')
+        if key == 'theme' and value not in THEME_NAMES:
+            raise ValueError('Unknown theme')
         saved = read_json(self.overrides)
         saved[key] = value
         write_json(self.overrides, saved)
@@ -115,6 +124,9 @@ class Appearance(QObject):
 
     def palette(self, day):
         return self.settings.get('day' if day else 'night', touhou_palette(day))
+
+    def roles(self, day):
+        return theme_roles(self.settings.get('theme', 'touhou'), day)
 
     def alpha(self, value):
         return min(255, round(value * self.settings.get('glass_opacity', .65) / .65))
@@ -125,5 +137,53 @@ class Appearance(QObject):
         base = re.sub(r'#[0-9a-fA-F]{6}', lambda m: mapping.get(m[0].lower(), m[0]), base)
         base = re.sub(r'rgba\((\d+,\s*\d+,\s*\d+),\s*(\d+)\)',
                       lambda m: f'rgba({m[1]},{self.alpha(int(m[2]))})', base)
+        if self.settings.get('theme') != 'touhou':
+            base += self.character_stylesheet(day)
+        base += self.menu_stylesheet(day)
         size = self.settings.get('font_size', 13)
         return base + f'\nQWidget {{font-size:{size}px;}} QLabel#chatTitle {{font-size:{size+6}px;}}\n' + self.css
+
+
+    def character_stylesheet(self, day):
+        c, p = self.roles(day), self.palette(day)
+        def glass(key, alpha=210):
+            colour = c[key].lstrip('#')
+            rgb = ','.join(str(int(colour[i:i+2], 16)) for i in (0, 2, 4))
+            return f'rgba({rgb},{self.alpha(alpha)})'
+        return f"""
+QWidget {{ color:{c['text']}; }}
+QDialog {{ background:{p['top']}; }}
+QLabel#chatTitle {{ color:{c['text']}; }}
+QLabel#chatSubtitle, QLabel#composerHint, QLabel#sysBubble {{ color:{c['muted']}; }}
+QLabel#userBubble {{ background:{glass('user')}; color:{c['text']}; border-color:{c['border']}; }}
+QLabel#petBubble {{ background:{glass('bubble')}; color:{c['text']}; border-color:{c['border']}; border-left-color:{p['vermilion']}; }}
+QPlainTextEdit, QListWidget {{ background:{glass('bubble', 205)}; color:{c['text']}; border:1px solid {c['border']}; selection-background-color:{c['hover']}; selection-color:{c['selected']}; }}
+QPlainTextEdit:focus {{ border-color:{c['blue']}; }}
+QPushButton {{ background:{glass('user', 190)}; color:{c['text']}; border-color:{c['border']}; }}
+QPushButton:hover {{ background:{c['hover']}; border-color:{p['gold']}; }}
+QPushButton:pressed {{ background:{c['border']}; }}
+QPushButton:disabled {{ background:{c['surface']}; color:{c['muted']}; border-color:{c['border']}; }}
+QPushButton#sendButton {{ background:{c['button']}; color:{c['button_text']}; border-color:{c['button']}; }}
+QPushButton#sendButton:hover {{ background:{c['blue']}; color:{p['top']}; border-color:{p['gold']}; }}
+QPushButton#sendButton:pressed {{ background:{c['selected']}; color:{p['top']}; }}
+QPushButton#sendButton:disabled {{ background:{c['border']}; color:{c['muted']}; border-color:{c['border']}; }}
+QPushButton#attachmentTag {{ background:{glass('user', 205)}; color:{c['blue']}; border-color:{p['gold']}; }}
+QPushButton#moreButton {{ background:transparent; color:{c['blue']}; border-color:{c['border']}; }}
+QScrollBar::handle:vertical {{ background:{c['border']}; }}
+QScrollBar::handle:vertical:hover {{ background:{p['vermilion']}; }}
+"""
+
+    def menu_stylesheet(self, day):
+        c, p = self.roles(day), self.palette(day)
+        size = self.settings.get('font_size', 13)
+        # Opaque popup surfaces keep menu labels readable over any desktop.
+        return f"""
+QMenu {{ background:{p['top']}; color:{c['text']}; border:1px solid {p['gold']}; border-top:3px solid {p['vermilion']}; padding:7px; font-size:{size}px; }}
+QMenu::item {{ padding:8px 32px 8px 27px; margin:2px 0; border-radius:6px; }}
+QMenu::item:selected {{ background:{c['hover']}; color:{c['selected']}; }}
+QMenu::item:disabled {{ color:{c['muted']}; }}
+QMenu::separator {{ height:1px; background:{c['border']}; margin:6px 12px; }}
+QMenu::indicator {{ width:10px; height:10px; margin-left:7px; border:1px solid {c['border']}; border-radius:5px; }}
+QMenu::indicator:checked {{ background:{p['vermilion']}; border-color:{p['vermilion']}; }}
+QMenu::indicator:unchecked {{ background:transparent; }}
+""" + self.css

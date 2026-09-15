@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 import sys
 import time
-from PySide6.QtCore import Qt, QTimer, Signal, QUrl, QRectF, QPointF, QByteArray
+from PySide6.QtCore import Qt, QTimer, Signal, QUrl, QRectF, QPointF, QByteArray, Slot
 from PySide6.QtGui import (QDesktopServices, QKeySequence, QShortcut, QTextCursor,
     QPainter, QColor, QPen, QPainterPath, QLinearGradient, QPalette)
 from PySide6.QtWidgets import (QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
@@ -13,7 +13,8 @@ from PySide6.QtWidgets import (QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxL
 
 import companion as C
 import memory as M
-from ui_theme import is_daytime, touhou_palette
+from ui_theme import is_daytime, touhou_palette, theme_roles
+from theme_widgets import ThemeMenu, add_appearance_menu, draw_motif
 from native_glass import NativeGlass
 from desktop_state import DesktopState, Appearance
 
@@ -116,6 +117,9 @@ class ShrineEmblem(QWidget):
     def __init__(self):
         super().__init__()
         self.day = True
+        self.theme = 'touhou'
+        self.colours = touhou_palette(True)
+        self.roles = theme_roles('touhou', True)
         self._spinning = False
         self._quiet = False
         self._angle = 0.0
@@ -176,37 +180,21 @@ class ShrineEmblem(QWidget):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(QPen(QColor('#d6b38a' if self.day else '#927959'), 1))
-        p.setBrush(Qt.NoBrush)
-        p.drawEllipse(QRectF(3, 3, 46, 46))
         p.save()
         p.translate(26, 26)
         p.rotate(self._angle)
         p.translate(-26, -26)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor('#b4413e'))
-        p.drawEllipse(QRectF(8, 8, 36, 36))
-        light = QPainterPath()
-        light.moveTo(26, 8)
-        light.arcTo(QRectF(8, 8, 36, 36), 90, 180)
-        light.cubicTo(14, 44, 14, 26, 26, 26)
-        light.cubicTo(38, 26, 38, 8, 26, 8)
-        p.setBrush(QColor('#fffaf0' if self.day else '#e3d4ba'))
-        p.drawPath(light)
-        p.setBrush(QColor('#b4413e'))
-        p.drawEllipse(QPointF(26, 17), 2.7, 2.7)
-        p.setBrush(QColor('#fffaf0' if self.day else '#e3d4ba'))
-        p.drawEllipse(QPointF(26, 35), 2.7, 2.7)
+        draw_motif(p, self.theme, QRectF(0, 0, 52, 52), self.colours, self.roles)
         p.restore()
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor('#bc976a'))
+        p.setBrush(QColor(self.colours['gold']))
         for x, y in ((26, 1), (51, 26), (26, 51), (1, 26)):
             p.drawEllipse(QPointF(x, y), 1.4, 1.4)
         if self._pulse_started is not None and not self._quiet:
             progress = min(1., max(0., (time.monotonic() - self._pulse_started) / 1.2))
             alpha = round(math.sin(progress * math.pi) * (90 if self.day else 105))
             for i in range(18):
-                colour = QColor('#b4413e' if i % 2 == 0 else '#bc976a')
+                colour = QColor(self.colours['vermilion'] if i % 2 == 0 else self.colours['gold'])
                 colour.setAlpha(alpha)
                 p.setBrush(colour)
                 p.save()
@@ -221,21 +209,28 @@ class ShrineDivider(QWidget):
     def __init__(self):
         super().__init__()
         self.day = True
+        self.theme = 'touhou'
+        self.colours = touhou_palette(True)
+        self.roles = theme_roles('touhou', True)
         self.setFixedHeight(17)
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(QPen(QColor('#d3b693' if self.day else '#786753'), 1))
+        p.setPen(QPen(QColor(self.colours['gold']), 1))
         p.drawLine(0, 3, self.width(), 3)
+        if self.theme != 'touhou':
+            for x in (self.width() - 69, self.width() - 43, self.width() - 17):
+                draw_motif(p, self.theme, QRectF(x - 7, 1, 16, 16), self.colours, self.roles)
+            return
         # Folded paper streamers, like the shide on a shrine rope.
         for x in (self.width() - 69, self.width() - 43, self.width() - 17):
             paper = QPainterPath(QPointF(x, 2))
             for dx, y in ((7, 2), (3, 7), (7, 7), (1, 15), (-3, 15), (1, 10), (-3, 10)):
                 paper.lineTo(x + dx, y)
             paper.closeSubpath()
-            p.setBrush(QColor('#fffdf5' if self.day else '#292a30'))
+            p.setBrush(QColor(self.colours['top']))
             p.drawPath(paper)
 
 
@@ -316,7 +311,9 @@ class ChatWindow(QWidget):
         self._save_error = False
         root = self.store.path.parent.parent
         self.desktop_state = DesktopState(root)
-        self.appearance = Appearance(root, self)
+        if not hasattr(pet, 'appearance'):
+            pet.appearance = Appearance(root, pet)
+        self.appearance = pet.appearance
         self._draft_session = self.store.session()
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
@@ -432,7 +429,7 @@ class ChatWindow(QWidget):
         self._ui_ready = True
         self.input.textChanged.connect(self._schedule_save)
         self.input.cursorPositionChanged.connect(self._schedule_save)
-        self.appearance.changed.connect(lambda: self._refresh_theme(force=True))
+        self.appearance.changed.connect(self._appearance_changed)
         QApplication.instance().aboutToQuit.connect(self.prepare_quit)
 
     def _schedule_save(self):
@@ -511,6 +508,10 @@ class ChatWindow(QWidget):
         super().moveEvent(event)
         self._schedule_save()
 
+    @Slot()
+    def _appearance_changed(self):
+        self._refresh_theme(force=True)
+
     def _refresh_theme(self, force=False):
         day = is_daytime()
         if not force and day == self._day:
@@ -519,10 +520,13 @@ class ChatWindow(QWidget):
         self.setStyleSheet(self.appearance.stylesheet(glass_style(day), day))
         self._glass.update(day)
         palette = self.input.palette()
-        palette.setColor(QPalette.PlaceholderText, QColor('#806d63' if day else '#b5a69c'))
+        palette.setColor(QPalette.PlaceholderText, QColor(self.appearance.roles(day)['muted']))
         self.input.setPalette(palette)
         for ornament in (self.emblem, self.divider):
             ornament.day = day
+            ornament.theme = self.appearance.settings.get('theme', 'touhou')
+            ornament.colours = self.appearance.palette(day)
+            ornament.roles = self.appearance.roles(day)
             ornament.update()
         self.update()
 
@@ -577,7 +581,9 @@ class ChatWindow(QWidget):
         p.drawRoundedRect(QRectF(self.rect()).adjusted(.5, .5, -.5, -.5), 18, 18)
         # Faint concentric danmaku patterns stay behind the conversation.
         cx, cy = self.width() - 25, self.height() * .60
-        p.setPen(QPen(QColor(163, 88, 64, 16) if self._day else QColor(223, 181, 133, 20), 1))
+        pattern = QColor(colours['gold'])
+        pattern.setAlpha(20 if self._day else 25)
+        p.setPen(QPen(pattern, 1))
         p.setBrush(Qt.NoBrush)
         for radius in (75, 108, 142):
             p.drawEllipse(QPointF(cx, cy), radius, radius)
@@ -587,7 +593,7 @@ class ChatWindow(QWidget):
                 p.save()
                 p.translate(x, y)
                 p.rotate(math.degrees(angle))
-                p.setBrush(QColor(166, 76, 55, 12) if self._day else QColor(216, 148, 115, 17))
+                p.setBrush(pattern)
                 p.drawEllipse(QRectF(-5, -2, 10, 4))
                 p.restore()
 
@@ -659,7 +665,7 @@ class ChatWindow(QWidget):
         self.head.setText('安静陪伴中' if f else '小日和')
 
     def message_menu(self, mid, bubble, pos):
-        menu = QMenu(self)
+        menu = ThemeMenu(self.appearance, self)
         menu.addAction('复制', lambda: QApplication.clipboard().setText(bubble.text()))
         if self.store.message(mid)['status'] != 'forgotten':
             menu.addSeparator()
@@ -667,6 +673,7 @@ class ChatWindow(QWidget):
                 a = menu.addAction(label, lambda _=False, a=action: self.memory_action(mid, a))
                 a.setEnabled(not self.busy())
         menu.exec(bubble.mapToGlobal(pos))
+        menu.deleteLater()
 
     def memory_action(self, mid, action):
         try:
@@ -685,25 +692,17 @@ class ChatWindow(QWidget):
             QMessageBox.information(self, '记忆', str(e))
 
     def menu(self):
-        menu = QMenu(self)
+        menu = ThemeMenu(self.appearance, self, heading=True)
         a = menu.addAction('另起话题', self.new_topic)
         a.setEnabled(not self.busy())
         a = menu.addAction('以前的话题', self.old_topics)
         a.setEnabled(not self.busy())
         menu.addAction('查看约定', self.pet.companion.show_tasks)
-        appearance_menu = menu.addMenu('外观')
-        for title, key, choices in (
-            ('字号', 'font_size', [('标准', 13), ('大一点', 15), ('更大', 17)]),
-            ('玻璃质感', 'glass_opacity', [('清晰', .85), ('柔和', .65), ('通透', .4)]),
-        ):
-            submenu = appearance_menu.addMenu(title)
-            for label, value in choices:
-                action = submenu.addAction(label, lambda _=False, k=key, v=value: self.change_appearance(k, v))
-                action.setCheckable(True)
-                action.setChecked(self.appearance.settings.get(key) == value)
+        add_appearance_menu(menu, self.appearance, self.change_appearance)
         if self.store.focus():
             menu.addAction('结束陪伴', self.pet.companion.stop_focus)
         menu.exec(self.mapToGlobal(self.rect().topRight()))
+        menu.deleteLater()
 
     def change_appearance(self, key, value):
         try:

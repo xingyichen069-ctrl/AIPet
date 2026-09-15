@@ -155,6 +155,39 @@ class Desktop(unittest.TestCase):
         self.assertEqual(self.chat.appearance.settings['font_size'], 17)
         self.assertEqual(self.chat.input.toPlainText(), '调整外观时保留这段草稿')
 
+    def test_character_theme_switch_preserves_draft_attachment_and_history(self):
+        self.store.add_message('user', '保存好的对话')
+        self.store.add_message('assistant', '一起继续')
+        self.chat.restore()
+        self.chat.input.setPlainText('切换时保留的草稿')
+        material = self.root / '主题测试.md'
+        material.write_text('需要保留的附件内容', encoding='utf-8')
+        self.chat.load_attachment(material)
+        attachment = dict(self.chat.attachment)
+        history = self.store.history()
+        for theme in ('marisa', 'koishi', 'touhou'):
+            self.chat.change_appearance('theme', theme)
+            for day in (True, False):
+                with patch.object(UI, 'is_daytime', return_value=day):
+                    self.chat._refresh_theme(force=True)
+                    self.chat._glass_ready = False
+                    frame = self.chat.grab().toImage()
+                    self.assertEqual(frame.pixelColor(10, 40).name(),
+                                     ui_theme.character_palette(theme, day)['top'])
+                    self.assertEqual(self.chat.emblem.theme, theme)
+                    self.assertEqual(self.chat.divider.theme, theme)
+            self.assertEqual(self.chat.input.toPlainText(), '切换时保留的草稿')
+            self.assertEqual(self.chat.attachment, attachment)
+            self.assertEqual(self.store.history(), history)
+        self.chat.change_appearance('theme', 'koishi')
+        self.reopen_chat()
+        self.assertEqual(self.chat.appearance.settings['theme'], 'koishi')
+        self.assertEqual(self.chat.attachment, attachment)
+        self.assertEqual(self.chat.input.toPlainText(), '切换时保留的草稿')
+        # A shared appearance object must disconnect a destroyed chat receiver.
+        self.chat.change_appearance('theme', 'marisa')
+        self.assertEqual(self.chat.emblem.theme, 'marisa')
+
     def test_external_theme_changes_reload_after_atomic_replace(self):
         with patch.object(UI, 'is_daytime', return_value=True):
             self.chat._refresh_theme(force=True)

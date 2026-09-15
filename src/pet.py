@@ -68,6 +68,8 @@ except ImportError:
 import memory as M          # noqa: E402
 import thinking as T        # noqa: E402
 from ui_theme import is_daytime
+from desktop_state import Appearance
+from theme_widgets import ThemeMenu, add_appearance_menu
 
 ROOT = M.ROOT
 ASSETS = ROOT / "assets"
@@ -915,6 +917,7 @@ class PetWindow(QWidget):
         self._restore_pos()
         self._watch_config()
         self.companion = CompanionController(self)
+        self.appearance = Appearance(ROOT, self)
 
     # ---------------------------------------------------------- 代理
 
@@ -1134,7 +1137,12 @@ class PetWindow(QWidget):
     # ---------------------------------------------------------- 右键菜单
 
     def _menu(self, gpos: QPoint):
-        m = QMenu(self)
+        m = self._build_menu()
+        m.exec(gpos)
+        m.deleteLater()
+
+    def _build_menu(self):
+        m = ThemeMenu(self.appearance, self, heading=True)
         m.addAction("打开对话", self.open_chat)
         m.addAction("查看约定", self.companion.show_tasks)
         if self.companion.store.focus():
@@ -1155,6 +1163,7 @@ class PetWindow(QWidget):
         else:
             off = m.addAction("QQ 没在跑（用 tools/qq_ctl.py start 启动）")
             off.setEnabled(False)
+        add_appearance_menu(m, self.appearance)
         advanced = m.addMenu("高级")
         advanced.addAction("显示 / 隐藏思考面板", self._toggle_panel)
         levels = advanced.addMenu("思考强度")
@@ -1179,7 +1188,7 @@ class PetWindow(QWidget):
         advanced.addAction("打开配置文件", self._open_config)
         m.addSeparator()
         m.addAction("退出", self.quit_safely)
-        m.exec(gpos)
+        return m
 
     def _show_people(self):
         """把群里认得的人列出来。纯文本就够，不值得为它做个窗口。"""
@@ -1337,9 +1346,10 @@ def main() -> None:
     app.setQuitOnLastWindowClosed(False)
     if QSystemTrayIcon.isSystemTrayAvailable():
         pet.tray = QSystemTrayIcon(QIcon(str(CHAR_PNG)), pet)
-        tray_menu = QMenu()
+        tray_menu = ThemeMenu(pet.appearance, pet, heading=True)
         tray_menu.addAction("打开对话", pet.open_chat)
         tray_menu.addAction("显示桌宠 / 恢复点击", pet.reveal)
+        add_appearance_menu(tray_menu, pet.appearance)
         tray_menu.addAction("退出", pet.quit_safely)
         pet.tray.setContextMenu(tray_menu)
         pet.tray.setToolTip("小日和")
