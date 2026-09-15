@@ -89,25 +89,23 @@ def chat_style(day):
 
 def glass_style(day):
     surfaces = '''
-    QLabel#userBubble { background:rgba(238,210,211,175); border:1px solid rgba(255,255,255,190); border-radius:17px; }
-    QLabel#petBubble { background:rgba(255,255,255,165); border:1px solid rgba(255,255,255,225); border-radius:17px; }
-    QPlainTextEdit { background:rgba(255,255,255,155); border:1px solid rgba(255,255,255,220); border-radius:18px; }
-    QPlainTextEdit:focus { border-color:rgba(175,93,100,170); }
-    QPushButton { background:rgba(255,255,255,110); border:1px solid rgba(255,255,255,200); border-radius:14px; }
-    QPushButton:hover { background:rgba(255,255,255,190); }
-    QPushButton#sendButton { border-radius:18px; background:rgba(161,57,66,230); border-color:rgba(255,218,220,190); }
-    QPushButton#attachmentTag { background:rgba(255,242,212,140); border-color:rgba(215,190,151,155); border-radius:12px; }
-    QPushButton#moreButton { border-radius:17px; background:rgba(255,255,255,110); border-color:rgba(255,255,255,200); }
+    QLabel#userBubble { background:rgba(246,229,223,210); border-radius:17px; }
+    QLabel#petBubble { background:rgba(255,253,248,210); border-radius:17px; }
+    QPlainTextEdit { background:rgba(255,253,249,205); border-radius:18px; }
+    QPushButton { background:rgba(240,231,218,190); border-radius:14px; }
+    QPushButton:hover { background:rgba(233,216,200,220); }
+    QPushButton#sendButton { border-radius:18px; background:#ad403b; }
+    QPushButton#attachmentTag { background:rgba(255,244,219,205); border-radius:12px; }
+    QPushButton#moreButton { border-radius:17px; background:rgba(255,250,241,100); }
     ''' if day else '''
-    QLabel#userBubble { background:rgba(89,60,80,155); border:1px solid rgba(231,195,213,70); border-radius:17px; }
-    QLabel#petBubble { background:rgba(47,57,76,165); border:1px solid rgba(226,236,255,60); border-radius:17px; }
-    QPlainTextEdit { background:rgba(30,39,55,160); border:1px solid rgba(220,232,255,75); border-radius:18px; }
-    QPlainTextEdit:focus { border-color:rgba(225,157,162,170); }
-    QPushButton { background:rgba(89,98,121,70); border:1px solid rgba(222,232,255,65); border-radius:14px; }
-    QPushButton:hover { background:rgba(106,110,136,130); }
-    QPushButton#sendButton { border-radius:18px; background:rgba(170,66,77,225); border-color:rgba(255,196,208,110); }
-    QPushButton#attachmentTag { background:rgba(92,76,57,100); border-color:rgba(206,185,136,95); border-radius:12px; }
-    QPushButton#moreButton { border-radius:17px; background:rgba(89,98,121,70); border-color:rgba(222,232,255,65); }
+    QLabel#userBubble { background:rgba(59,45,53,210); border-radius:17px; }
+    QLabel#petBubble { background:rgba(34,41,55,210); border-radius:17px; }
+    QPlainTextEdit { background:rgba(28,35,48,205); border-radius:18px; }
+    QPushButton { background:rgba(45,45,56,190); border-radius:14px; }
+    QPushButton:hover { background:rgba(65,52,62,220); }
+    QPushButton#sendButton { border-radius:18px; background:#a64140; }
+    QPushButton#attachmentTag { background:rgba(48,43,41,205); border-radius:12px; }
+    QPushButton#moreButton { border-radius:17px; background:rgba(25,30,42,100); }
     '''
     return chat_style(day) + surfaces
 
@@ -381,12 +379,12 @@ class ChatWindow(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         paper = QLinearGradient(0, 0, self.width(), self.height())
         if self._glass_ready:
-            paper.setColorAt(0, QColor(249, 252, 255, 95) if self._day else QColor(16, 24, 42, 125))
-            paper.setColorAt(.45, QColor(246, 247, 255, 30) if self._day else QColor(20, 27, 45, 70))
-            paper.setColorAt(1, QColor(238, 240, 252, 70) if self._day else QColor(20, 24, 39, 105))
+            paper.setColorAt(0, QColor(255, 250, 241, 175) if self._day else QColor(25, 30, 42, 175))
+            paper.setColorAt(.45, QColor(251, 245, 234, 130) if self._day else QColor(22, 27, 39, 130))
+            paper.setColorAt(1, QColor(245, 237, 223, 160) if self._day else QColor(18, 23, 35, 160))
         else:
-            paper.setColorAt(0, QColor('#f1f5fc' if self._day else '#202b40'))
-            paper.setColorAt(1, QColor('#e4e8f1' if self._day else '#141b2c'))
+            paper.setColorAt(0, QColor('#fffaf1' if self._day else '#191e2a'))
+            paper.setColorAt(1, QColor('#f5eddf' if self._day else '#121723'))
         p.fillRect(self.rect(), paper)
         edge = QLinearGradient(0, 0, self.width(), self.height())
         edge.setColorAt(0, QColor(255, 255, 255, 210 if self._day else 90))
