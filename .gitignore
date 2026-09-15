@@ -1,0 +1,32 @@
+# Local runtime and personal data remain on disk, outside code history.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+.env
+.env.*
+data/*
+!data/thinking.json
+persona/
+memory/
+knowledge/
+view/
+backups/
+work/
+原版留档/
+*.zip
+*.log
+*.lock
+*.sqlite3*
+*.db
+*.pem
+*.key
+core
+core.*
+_t.py
+
+# Runtime model assets are versioned; large editing originals stay local.
+*.cmo3
+*.can3
+*.psd

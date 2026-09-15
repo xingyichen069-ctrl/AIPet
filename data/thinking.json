@@ -1,0 +1,195 @@
+{
+  "_说明": "思考强度配置。面板上的选项和这里一一对应。改完保存，面板会自动重载。",
+  "_手册": "详细调参说明见 docs/思考强度配置手册.md",
+  "current": "max",
+  "_current": "auto | frugal | daily | serious | deep | max",
+  "auto_rules": {
+    "_说明": "自动模式下按这些规则判断该用哪一档。分数从 0 起算，落在哪个区间就用哪档。",
+    "thresholds": {
+      "frugal": 8,
+      "daily": 25,
+      "serious": 50,
+      "deep": 75
+    },
+    "_thresholds": "score < 8 → frugal；8-25 → daily；25-50 → serious；50-75 → deep；>=75 → max",
+    "signals": {
+      "_说明": "命中即加分。想调自动判断的灵敏度，改这里的权重。",
+      "length_per_20_chars": 6,
+      "question_words": {
+        "为什么": 12,
+        "怎么": 8,
+        "如何": 8,
+        "分析": 14,
+        "设计": 12,
+        "比较": 10,
+        "评价": 10,
+        "方案": 12,
+        "原理": 14,
+        "推导": 16,
+        "证明": 16,
+        "优化": 12,
+        "重构": 14,
+        "架构": 14,
+        "权衡": 14
+      },
+      "depth_words": {
+        "仔细": 18,
+        "认真": 15,
+        "深入": 20,
+        "详细": 12,
+        "全面": 18,
+        "彻底": 20,
+        "慢慢": 10,
+        "想清楚": 22,
+        "别急": 15
+      },
+      "simple_words": {
+        "在吗": -30,
+        "在不在": -30,
+        "几点了": -28,
+        "几点": -25,
+        "你好": -25,
+        "早": -20,
+        "晚安": -25,
+        "嗯": -30,
+        "哦": -30,
+        "哈哈": -25,
+        "好": -18,
+        "谢谢": -22,
+        "测试": -20
+      },
+      "code_signals": {
+        "报错": 18,
+        "bug": 16,
+        "调试": 16,
+        "崩溃": 18,
+        "异常": 14,
+        "性能": 16,
+        "内存": 12,
+        "并发": 16,
+        "死锁": 20,
+        "泄漏": 18
+      }
+    }
+  },
+  "presets": {
+    "frugal": {
+      "name": "省电",
+      "icon": "○",
+      "color": "#6b7280",
+      "summary": "最快最省",
+      "feels_like": "它懒得想，随口答你。",
+      "when": "寒暄、报时、确认、测试——一句话能说完的事",
+      "params": {
+        "model": "deepseek::deepseek-flash",
+        "reasoning_effort": "none",
+        "max_tokens": 3000,
+        "temperature": 0.85,
+        "memory_budget": 3500,
+        "memory_entries": 3,
+        "memory_floor": 2,
+        "search": "off",
+        "self_check": false,
+        "verbosity": "一句话，不超过 20 字"
+      }
+    },
+    "daily": {
+      "name": "日常",
+      "icon": "◔",
+      "color": "#5eead4",
+      "summary": "默认档",
+      "feels_like": "正常聊天，不使劲也不敷衍。",
+      "when": "绝大多数日常对话。不知道选哪个就用这个",
+      "params": {
+        "model": "deepseek::deepseek-flash",
+        "reasoning_effort": "low",
+        "max_tokens": 8000,
+        "temperature": 0.75,
+        "memory_budget": 12000,
+        "memory_entries": 12,
+        "memory_floor": 4,
+        "search": "on_demand",
+        "self_check": false,
+        "verbosity": "1-3 句，保持它一贯的简短"
+      }
+    },
+    "serious": {
+      "name": "认真",
+      "icon": "◑",
+      "color": "#38bdf8",
+      "summary": "开始动脑子",
+      "feels_like": "它放下手里的事，正眼看你了。",
+      "when": "需要解释、对比、给建议的问题",
+      "params": {
+        "model": "deepseek::deepseek-flash",
+        "reasoning_effort": "medium",
+        "max_tokens": 20000,
+        "temperature": 0.65,
+        "memory_budget": 25000,
+        "memory_entries": 25,
+        "memory_floor": 5,
+        "search": "on_demand",
+        "self_check": false,
+        "verbosity": "3-6 句，可以分点，但仍然不用客服腔"
+      }
+    },
+    "deep": {
+      "name": "深究",
+      "icon": "◕",
+      "color": "#c084fc",
+      "summary": "完整推理 + 自检",
+      "feels_like": "它沉默了几秒，然后开口。",
+      "when": "写代码、设计方案、排查疑难、需要权衡取舍",
+      "params": {
+        "model": "deepseek::deepseek-flash",
+        "reasoning_effort": "high",
+        "max_tokens": 40000,
+        "temperature": 0.55,
+        "memory_budget": 50000,
+        "memory_entries": 50,
+        "memory_floor": 6,
+        "search": "eager",
+        "self_check": true,
+        "verbosity": "完整展开。允许长，但不许注水"
+      }
+    },
+    "max": {
+      "name": "极限",
+      "icon": "●",
+      "color": "#fbbf24",
+      "summary": "拉满",
+      "feels_like": "它把整件事从头到尾推了一遍，连你可能问的下一句都想到了。",
+      "when": "重要决策、复杂重构、写论文级别的产出",
+      "params": {
+        "model": "deepseek::deepseek-flash",
+        "reasoning_effort": "max",
+        "max_tokens": 80000,
+        "temperature": 0.5,
+        "memory_budget": 90000,
+        "memory_entries": 80,
+        "memory_floor": 8,
+        "search": "always",
+        "self_check": true,
+        "verbosity": "尽可能完整。分点、举例、给边界条件"
+      }
+    }
+  },
+  "ui": {
+    "_说明": "面板外观。",
+    "appear_on": "click",
+    "_appear_on": "click | hover | always",
+    "position": "right",
+    "_position": "面板出现在角色的 right | left | top | bottom",
+    "offset": 12,
+    "_offset": "面板与角色的间距（像素）",
+    "auto_hide_seconds": 12,
+    "_auto_hide_seconds": "无操作多久后自动收起。0 = 不自动收",
+    "show_shortcut": "Ctrl+Shift+T",
+    "_show_shortcut": "全局快捷键，切换面板显隐"
+  },
+  "notify": {
+    "_说明": "换档时是否在气泡里说一句。",
+    "announce": true,
+    "announce_style": "用 SOUL.md 里的语气说一句，不超过 12 字，不要解释参数"
+  }
+}
