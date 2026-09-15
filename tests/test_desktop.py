@@ -106,7 +106,8 @@ class Desktop(unittest.TestCase):
         QTest.qWait(350)
         saved = DesktopState(self.root)
         self.assertEqual(saved.data['drafts'][self.store.session()]['text'], '还没写完的草稿')
-        self.assertEqual(saved.path.stat().st_mode & 0o777, 0o600)
+        if os.name != 'nt':
+            self.assertEqual(saved.path.stat().st_mode & 0o777, 0o600)
         self.reopen_chat()
         self.assertEqual(self.chat.input.toPlainText(), '还没写完的草稿')
         self.assertEqual(self.chat.input.textCursor().position(), 0)

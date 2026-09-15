@@ -1,5 +1,6 @@
 # Local runtime and personal data remain on disk, outside code history.
 .venv/
+runtime/
 venv/
 __pycache__/
 *.py[cod]
