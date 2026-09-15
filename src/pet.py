@@ -755,6 +755,7 @@ class BubbleWindow(QWidget):
         self._resize_to_fit()
         self.reposition()
         self.show()
+        self.reposition()  # 原生窗口首次显示后可能调整位置，再对齐人物。
         self.raise_()
         self.update()
         QTimer.singleShot(ms, self.hide)
@@ -772,10 +773,12 @@ class BubbleWindow(QWidget):
         g = self.pet.frameGeometry()
         x = g.center().x() - self.width() // 2
         y = g.top() - self.height() - 2
-        scr = QApplication.primaryScreen().availableGeometry()
+        screen = QApplication.screenAt(g.center()) or self.pet.screen() or QApplication.primaryScreen()
+        scr = screen.availableGeometry()
         x = max(scr.left() + 4, min(x, scr.right() - self.width() - 4))
         if y < scr.top() + 4:
             y = g.bottom() + 2                     # 贴顶了改到下面
+        y = max(scr.top() + 4, min(y, scr.bottom() - self.height() - 4))
         self.move(int(x), int(y))
 
     def paintEvent(self, _):
@@ -977,6 +980,13 @@ class PetWindow(QWidget):
 
     def show_bubble(self, text: str, ms: int = 2600):
         self._ensure_bubble().show_text(text, ms)
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        # Live2D 和静态形象都移动外层窗口；移动时立即跟随，不等松开鼠标。
+        bubble = getattr(self, "bubble_win", None)
+        if bubble is not None and bubble.isVisible():
+            bubble.reposition()
 
     def _on_dragged(self):
         """拖完了 —— 存位置，并把气泡挪过去。"""
