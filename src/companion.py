@@ -16,10 +16,27 @@ MAX_ATTACHMENT_BYTES = 128 * 1024
 MAX_ATTACHMENT_CHARS = 24000
 
 
+IMAGE_SUFFIX = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'}
+
+
 def read_attachment(path):
     p = Path(path)
+
+    # ★ 图片走读图那条路：先用 vision 转成文字，之后当普通材料处理。
+    #   这样附件机制、附件条、随消息发送这些全都不用改 —— 图片对下游
+    #   就是个「名字是 xxx.png 的文本材料」。
+    if p.suffix.lower() in IMAGE_SUFFIX:
+        if not p.is_file():
+            raise ValueError('文件不存在。')
+        import vision as V
+        text = V.read(p, '把这张图里的内容读出来。有文字就逐字抄下来、保留分行；'
+                        '没有文字就平实描述画面里有什么。不要评价，不要推测用途。')
+        if not text.strip():
+            raise ValueError('这张图没读出内容。')
+        return {'name': p.name, 'text': text, 'image': True}
+
     if p.suffix.lower() not in {'.txt', '.text', '.md', '.markdown'}:
-        raise ValueError('目前支持 TXT 和 Markdown 文件。')
+        raise ValueError('支持 TXT / Markdown 文本，以及 PNG / JPG / WEBP / GIF / BMP 图片。')
     if not p.is_file() or p.stat().st_size > MAX_ATTACHMENT_BYTES:
         raise ValueError('文件不存在或超过 128 KB，请选一段较短的材料。')
     raw = p.read_bytes()

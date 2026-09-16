@@ -79,7 +79,11 @@ try:
 except ImportError:
     LT, TOOLSPECS, HAS_TOOLS = None, [], False
 
-MAX_TOOL_ROUNDS = 5         # 防止工具调用打转
+# ★ 原来定的是 5。实测撞过：让她看一张图，她先猜错目录、列一次目录
+#   找到文件、再读图，三步就到顶了 —— 结果话都没说出来就断了。
+#   提到 8：够「找文件 → 读图 → 记一笔」这类多步操作，又不至于打转太久。
+#   QQ 那边的真正闸门是 REPLY_BUDGET_S（240 秒），不是这个数。
+MAX_TOOL_ROUNDS = 8         # 防止工具调用打转
 
 
 if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("-", "") != "utf8":
@@ -271,7 +275,8 @@ def _explain(e: Exception) -> str:
 
 def stream(query: str, history: list[dict] | None = None,
            level: str | None = None, cancelled=None,
-           system: str | None = None, max_tokens: int | None = None):
+           system: str | None = None, max_tokens: int | None = None,
+           block_tools: set[str] | None = None):
     """
     流式生成。产出 (类型, 文本)：
         ("level", 档位信息)  —— 只产一次，最先
@@ -291,6 +296,17 @@ def stream(query: str, history: list[dict] | None = None,
         payload["messages"][0] = {"role": "system", "content": system}
     if max_tokens is not None:
         payload["max_tokens"] = int(max_tokens)
+
+    # ★ 工具黑名单。QQ 那条路用它挡住 see_image —— 那个工具会把整个文件
+    #   发到校外服务器，不能让群里的人靠一句话就把谁的文件送出去。
+    #   在**调用之前**摘掉，不是调用之后拦：模型看不见这个工具，
+    #   就不会写出针对它的调用，也不会因为"我明明有这个工具"而反复试。
+    if block_tools and payload.get("tools"):
+        payload["tools"] = [t for t in payload["tools"]
+                            if t["function"]["name"] not in block_tools]
+        if not payload["tools"]:
+            payload.pop("tools", None)
+
     yield ("level", r)
 
     messages = list(payload["messages"])
@@ -440,7 +456,8 @@ def ask(query: str, history: list[dict] | None = None,
 def ask_with_system(query: str, system: str,
                     history: list[dict] | None = None,
                     level: str | None = None,
-                    max_tokens: int | None = None) -> tuple[str, str, dict]:
+                    max_tokens: int | None = None,
+                    block_tools: set[str] | None = None) -> tuple[str, str, dict]:
     """
     自带 system 地问一次。返回 (正文, 思维链, 档位信息)。
 
@@ -453,7 +470,8 @@ def ask_with_system(query: str, system: str,
     tools_used: list[str] = []
 
     for kind, val in stream(query, history, level,
-                            system=system, max_tokens=max_tokens):
+                            system=system, max_tokens=max_tokens,
+                            block_tools=block_tools):
         if kind == "content":
             text.append(val)
         elif kind == "reasoning":

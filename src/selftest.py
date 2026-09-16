@@ -328,6 +328,10 @@ def test_mood_triggers():
 def test_speaker_states():
     section("说话人三态 + 写锁")
 
+    # 记忆库整份原样快照，收尾时原样写回（见函数末尾的说明）
+    _jf = M._p("journal")
+    _journal_before = _jf.read_bytes() if _jf.exists() else None
+
     K = M.speaker_kind
     check("老条目没 speaker 字段 → owner", K({}) == "owner")
     check("显式 null → owner", K({"speaker": None}) == "owner")
@@ -374,9 +378,18 @@ def test_speaker_states():
     check("条数对得上", len(M.load_journal()) == before + len(ids),
           f"{before} → {len(M.load_journal())}")
 
-    # 收尾：把测试写入的条目删掉
-    kept = [e for e in M.load_journal() if e.get("source") != "_test"]
-    M.save_journal(kept)
+    # 收尾：把记忆库还原成测试之前的样子。
+    #
+    # ★ 不要用「过滤掉 test 条目再写回」。M.load_journal() 会过滤掉
+    #   用户「撤回并忘记」的条目，拿它的结果 save_journal，等于把那些
+    #   条目从磁盘上永久抹掉。原样快照 + 原样还原最安全。
+    if _journal_before is None:
+        try:
+            M._p("journal").unlink()
+        except OSError:
+            pass
+    else:
+        M._p("journal").write_bytes(_journal_before)
     check("测试数据已清干净",
           not any(e.get("source") == "_test" for e in M.load_journal()))
 

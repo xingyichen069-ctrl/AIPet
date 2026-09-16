@@ -43,6 +43,7 @@ import re
 import sys
 import threading
 import time
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -306,6 +307,95 @@ def build_system(ev: QB.QQEvent) -> tuple[str, dict]:
 
 
 # ═══════════════════════════════════════════════════════════════
+#  图片
+# ═══════════════════════════════════════════════════════════════
+
+MEDIA_DIR = M.ROOT / "data" / "qq_media"
+
+# 下载上限。QQ 那边原图能到几 MB，读图接口也吃不下更大的。
+MEDIA_MAX_BYTES = 8 * 1024 * 1024
+
+# 留多久。这些图只是中转一下给她看，看完就没用了 ——
+# 攒着既占地方，也是把别人发的东西留在了本地。
+# 7 天是给「她当时没看懂、过两天想再翻」留的余量。
+# ★ 但如果她把图挪进了 D:\CXY（用 keep_image），那就不归这儿管了 ——
+#   挪出去 = 用户明确要留，清理只扫这个中转目录。
+MEDIA_KEEP_DAYS = 7
+MEDIA_KEEP_HOURS = MEDIA_KEEP_DAYS * 24
+
+# 一条消息最多读几张。有人一口气发九宫格的话，全读一遍又慢又贵。
+MEDIA_MAX_PER_MSG = 3
+
+
+def _sweep_media() -> None:
+    """删掉过期的中转图。下载时顺手做，不用另起定时任务。"""
+    if not MEDIA_DIR.is_dir():
+        return
+    cutoff = time.time() - MEDIA_KEEP_HOURS * 3600
+    for f in MEDIA_DIR.iterdir():
+        try:
+            if f.is_file() and f.stat().st_mtime < cutoff:
+                f.unlink()
+        except OSError:
+            pass
+
+
+def _download(url: str, dest: Path, timeout: float = 30) -> bool:
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "AIPet/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = r.read(MEDIA_MAX_BYTES + 1)
+        if len(data) > MEDIA_MAX_BYTES:
+            log(f"图片超过 {MEDIA_MAX_BYTES // 1048576} MB，不要了")
+            return False
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        return True
+    except Exception as e:
+        log(f"下载图片失败：{type(e).__name__}: {e}")
+        return False
+
+
+def read_images(ev: QB.QQEvent) -> str:
+    """
+    把这条消息里的图读成文字。没有图、或者全读失败，返回空串。
+
+    ★ URL 带 rkey 签名，**会过期**。所以是收到就下载，不排队、不缓存 URL。
+      实测那条 url 长这样：
+        https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=...&rkey=...&spec=0
+
+    ★ 读图走 SJTU 那个部署（vision.py），**不是她的脑子** ——
+      DeepSeek 是纯文本的。所以群里发的图也会经过校外服务器，
+      这一点在 小日和辅助（SJTU AI）/README.md 里写过。
+    """
+    imgs = ev.images
+    if not imgs:
+        return ""
+
+    _sweep_media()
+    parts: list[str] = []
+    for i, a in enumerate(imgs[:MEDIA_MAX_PER_MSG], 1):
+        url = str(a.get("url") or "")
+        if not url:
+            continue
+        raw_name = str(a.get("filename") or f"img{i}.jpg")
+        safe = re.sub(r"[^\w.\-]", "_", Path(raw_name).name)[:60] or f"img{i}.jpg"
+        dest = MEDIA_DIR / f"{ev.msg_id[:12]}_{safe}"
+
+        if not _download(url, dest):
+            parts.append(f"【第 {i} 张图没取到】")
+            continue
+
+        import vision as V
+        text = V.read(dest, "把这张图里的内容读出来。有文字就逐字抄下来、保留分行；"
+                            "没有文字就平实描述画面里有什么。不要评价，不要推测用途。")
+        log(f"读了第 {i} 张图（{dest.name}）：{text[:60]}")
+        parts.append(f"【第 {i} 张图（{safe}）】\n{text}")
+
+    return "\n\n".join(parts)
+
+
+# ═══════════════════════════════════════════════════════════════
 #  认领
 # ═══════════════════════════════════════════════════════════════
 
@@ -429,7 +519,10 @@ class Bridge:
         if ev.kind not in ("group_at", "c2c"):
             log(f"忽略事件类型 {ev.kind}")
             return
-        if not (ev.content or "").strip():
+        # ★ 只看正文会把图片消息整条丢掉。实测：群里发图的推送是
+        #   content=" "（一个空格）+ attachments=[{url, content_type, ...}]。
+        #   所以判断「有没有内容」必须把附件也算上。
+        if not (ev.content or "").strip() and not ev.attachments:
             return
         t = threading.Thread(target=self._run, args=(ev,), daemon=True)
         t.start()
@@ -456,7 +549,21 @@ class Bridge:
 
     def _process(self, ev: QB.QQEvent, t0: float) -> None:
         who = identify(ev)
-        log(f"{'主人' if who['is_owner'] else '群友'} {who['name']!r}：{ev.content[:40]}")
+        # ★ 带 <image url="..."/> 这类富媒体标签的必须整条记下来。
+        #   平时截 40 字是为了日志好读，但图片消息的 URL 正好在
+        #   40 字往后 —— 截了就永远查不出格式，只能靠猜。
+        _raw = ev.content or ""
+        _show = _raw if (len(_raw) <= 400 or "<" in _raw) else _raw[:40] + "…"
+        log(f"{'主人' if who['is_owner'] else '群友'} {who['name']!r}：{_show}")
+
+        # ★ 图先读成文字，再入历史。
+        #   放在入历史之前是有意的：这样她下次翻聊天记录，看到的是
+        #   "对方发了张图，图里是 xxx"，而不是一个空格 —— 否则过一会儿
+        #   再提起这张图，她完全不记得有这回事。
+        if ev.attachments:
+            imported = read_images(ev)
+            if imported:
+                ev.content = ((ev.content or "").strip() + "\n\n" + imported).strip()
 
         # ★ 先入历史再回话。
         #   认领、低信息量这些也记 —— "再来再来"前面那句可能正是
@@ -477,7 +584,8 @@ class Bridge:
             hist_append(conv_key(ev), "assistant", "", c)
             return
 
-        if ev.content.strip().lower() in IGNORE_EXACT:
+        # 带图的消息正文可能是空的，别拿"低信息量"把它误杀
+        if not ev.attachments and ev.content.strip().lower() in IGNORE_EXACT:
             log("低信息量，不回")
             return
 
@@ -500,9 +608,15 @@ class Bridge:
 
         prompt = build_prompt(ev, who)
         try:
+            # ★ 非主人不给 see_image。那个工具会把整个文件 base64 之后
+            #   发到校外服务器（读图走的是 SJTU 的部署），群里任何人
+            #   都不该有这个口子 —— 一句"看看 D:\某文件.png"就够把东西送出去。
+            #   主人的记忆里有这条规矩，但记忆是说服，这里是拦。
+            blocked = None if who["is_owner"] else {"see_image"}
             reply, _reasoning, info = B.ask_with_system(
                 prompt, system,
-                level=meta["level"], max_tokens=budget)
+                level=meta["level"], max_tokens=budget,
+                block_tools=blocked)
         except Exception as e:
             log(f"brain 出错：{type(e).__name__}: {e}")
             return

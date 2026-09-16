@@ -366,6 +366,18 @@ class QQEvent:
     username: str = ""          # 昵称，可能为空串
     member_role: str = ""       # member | admin | owner
 
+    # 富媒体。实测的形态（2026-09-16，群里发图）：
+    #   content = " "（一个空格），attachments = [{content_type, filename, url, ...}]
+    #   url 带 rkey 签名，可以直接 GET —— **但它会过期**，
+    #   拿到就得马上下载，不能排队等。
+    attachments: list[dict] = field(default_factory=list)
+
+    @property
+    def images(self) -> list[dict]:
+        """附件里的图片。别的类型（文件/视频）先不管。"""
+        return [a for a in self.attachments
+                if str(a.get("content_type", "")).startswith("image/")]
+
     @property
     def speaker_id(self) -> str:
         """这个人在这条场景下的稳定 ID。"""
@@ -391,6 +403,7 @@ def parse_event(t: str, d: dict) -> QQEvent | None:
             union_openid=a.get("union_openid", "") or "",
             username=(a.get("username") or "").strip(),
             member_role=a.get("member_role", "") or "",
+            attachments=list(d.get("attachments") or []),
         )
     if t == "C2C_MESSAGE_CREATE":
         a = d.get("author") or {}
@@ -403,6 +416,7 @@ def parse_event(t: str, d: dict) -> QQEvent | None:
             user_openid=a.get("user_openid") or a.get("id", ""),
             union_openid=a.get("union_openid", "") or "",
             username=(a.get("username") or "").strip(),
+            attachments=list(d.get("attachments") or []),
         )
     if t in ("GROUP_ADD_ROBOT", "GROUP_DEL_ROBOT", "GROUP_MSG_REJECT",
              "GROUP_MSG_RECEIVE"):
@@ -586,6 +600,8 @@ class QQGateway:
         self._attempts = 0
         self._closing = False
         self.dedupe = Dedupe()
+        # 见过但没处理的事件类型。用来在日志里只报一次，不刷屏。
+        self._seen_types: set[str] = set()
         self._started = False
 
         # ── 看门狗 ──
@@ -779,9 +795,30 @@ class QQGateway:
             self._reconnect(resume=False)
 
     def _dispatch(self, t: str, d: dict) -> None:
+        # ★ 所有进入的事件类型都先记一笔，一个不漏。
+        #   起因：群里发了带图的消息，日志里只剩文字，探针也一声没响 ——
+        #   连"不认识的事件类型"都没报。那说明图片要么走了别的类型，
+        #   要么压根没推过来。不在这里记下所有类型，就分不清是哪一种。
+        #   （每种只报一次，免得刷屏）
+        if t not in self._seen_types:
+            self._seen_types.add(t)
+            log(f"事件类型（首次见到）：{t}｜顶层字段：{sorted(d)[:14]}")
+
         ev = parse_event(t, d)
         if ev is None:
             return
+
+        # ★ 空内容的极可能就是图片：QQ 把图放在富媒体字段里，正文是空的。
+        #   这里必须在**解析之后、交出去之前**看一眼原始 d ——
+        #   QQEvent 只留了 content，附件字段在 parse_event 那步就没了。
+        if not (ev.content or "").strip():
+            _keys = sorted(d)
+            log(f"⚠ 空内容事件 kind={ev.kind}｜原始字段：{_keys}")
+            for _k in ("content", "attachments", "message_type", "media", "file_info"):
+                if _k in d:
+                    _v = json.dumps(d[_k], ensure_ascii=False)[:500]
+                    log(f"    {_k} = {_v}")
+
         if ev.msg_id and self.dedupe.seen(ev.msg_id):
             log(f"重复推送，丢弃：{ev.msg_id[:24]}…")
             return

@@ -281,7 +281,7 @@ class Composer(QPlainTextEdit):
             if len(urls) == 1 and urls[0].isLocalFile():
                 self.fileDropped.emit(urls[0].toLocalFile())
             else:
-                QMessageBox.information(self, '材料', '一次选择一个本地文本文件。')
+                QMessageBox.information(self, '材料', '一次拖一个本地文件：文本或图片。')
             return
         self.insertPlainText(source.text())
 
@@ -396,7 +396,7 @@ class ChatWindow(QWidget):
         self.attach_btn = QPushButton('＋')
         self.attach_btn.setObjectName('attachButton')
         self.attach_btn.setFixedSize(36, 36)
-        self.attach_btn.setToolTip('添加 TXT / Markdown 材料，也可以直接拖入')
+        self.attach_btn.setToolTip('添加材料（文本或图片），也可以直接拖入。图片会自动读成文字')
         self.attach_btn.clicked.connect(self.choose_attachment)
         bottom.addWidget(self.attach_btn)
         self.input = Composer()
@@ -737,7 +737,11 @@ class ChatWindow(QWidget):
             self._restore_draft()
 
     def choose_attachment(self):
-        path, _ = QFileDialog.getOpenFileName(self, '选择材料', '', '文本材料 (*.txt *.text *.md *.markdown)')
+        path, _ = QFileDialog.getOpenFileName(
+            self, '选择材料', '',
+            '文本与图片 (*.txt *.text *.md *.markdown *.png *.jpg *.jpeg *.webp *.gif *.bmp)'
+            ';;文本材料 (*.txt *.text *.md *.markdown)'
+            ';;图片 (*.png *.jpg *.jpeg *.webp *.gif *.bmp)')
         if path:
             self.load_attachment(path)
 

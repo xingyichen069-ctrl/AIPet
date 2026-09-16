@@ -5,6 +5,7 @@ THEME_NAMES = {
     'touhou': '东方 · 朱色结界',
     'marisa': '雾雨魔理沙 · 星屑魔法',
     'koishi': '古明地恋 · 无意识之庭',
+    'cirno': '琪露诺 · 冰晶雾湖',
 }
 TOUHOU_DAY = {
     'top': '#fffaf1', 'bottom': '#f5eddf',
@@ -23,6 +24,13 @@ PALETTES = {
     'koishi': (
         dict(top='#f8fbe9', bottom='#e4f0df', vermilion='#3b785f', gold='#c8ac38'),
         dict(top='#192e34', bottom='#12232c', vermilion='#84c7a0', gold='#e3ca69')),
+    # 琪露诺 —— 湖上的冰精。取自官方设定的两个锚点：
+    #   蓝色无袖连衣裙（主色）+ 背后三对六棱柱翅膀（所以 motif 是六角雪花）。
+    #   vermilion/gold 这两个键名是从 touhou 继承的，实际含义是「主色 / 点缀」，
+    #   别被名字骗了 —— 这里的 vermilion 是冰蓝，不是朱红。
+    'cirno': (
+        dict(top='#f6fcff', bottom='#dff1fb', vermilion='#3f9fcf', gold='#8ad4ef'),
+        dict(top='#0f1c2b', bottom='#0a1420', vermilion='#7ecfee', gold='#a9e3f8')),
 }
 # Readable foregrounds and tinted control surfaces, including night variants.
 ROLES = {
@@ -35,6 +43,12 @@ ROLES = {
     'koishi': (
         ('#23494c', '#5a7470', '#b4cbb3', '#e6eec0', '#244e64', '#326c85', '#f8fbe9', '#326c85', '#fff7ca', '#f6fcf4', '#e5f1d5'),
         ('#e6f2e8', '#adc6b5', '#476b65', '#34554d', '#fff0a4', '#91cbe0', '#192e34', '#e3ca69', '#203f4b', '#213c41', '#2e4940')),
+    # 日间偏「雾之湖的白昼」：白衬衫的白 + 冰和水那种很浅的蓝。
+    # 夜间是「湖面结冰的深夜」：整片深蓝，主色提亮成发光的冰。
+    # button_text 夜间用深色（#08202e）—— 按钮本身是亮冰蓝，上面压白字看不清。
+    'cirno': (
+        ('#203a4c', '#5f7d90', '#b9d9e9', '#ddf0fa', '#2b6f97', '#3f9fcf', '#f6fcff', '#3f9fcf', '#ffffff', '#f9fdff', '#e3f3fb'),
+        ('#dcebf6', '#8ea9bd', '#2f4b60', '#365a71', '#c3e9fb', '#7ecfee', '#0f1c2b', '#7ecfee', '#08202e', '#111f2f', '#1b3549')),
 }
 ROLE_KEYS = ('text', 'muted', 'border', 'hover', 'selected', 'blue', 'surface', 'button', 'button_text', 'bubble', 'user')
 

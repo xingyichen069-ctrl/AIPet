@@ -42,6 +42,35 @@ def draw_motif(p, theme, rect, colours, roles):
         lid = QPainterPath(QPointF(18, 24))
         lid.quadTo(26, 30, 34, 24)
         p.drawPath(lid)
+    elif theme == 'cirno':
+        # 六角雪花。不是随便挑的 —— 官方设定写她背后长着「三對六棱柱狀翅膀」，
+        # 六棱柱就是六角，所以六角雪花的来历是有据的。
+        #
+        # ★ 按尺寸分两档画。踩过：主枝加侧枝一共 18 条线，在 52px 的徽章上
+        #   很好看，到了 16px 的分隔线上就糊成一团 —— 同尺寸下另外三个主题
+        #   （太极/星星/心）都还认得出，只有这个成了蓝疙瘩。
+        #   小尺寸砍掉一半侧枝、把线加粗，形状反而更清楚。
+        small = rect.width() < 24
+        segs = ((0.66, 9.0),) if small else ((0.52, 7.0), (0.80, 5.0))
+        p.setPen(QPen(QColor(colours['vermilion']),
+                      2.8 if small else 2.0, Qt.SolidLine, Qt.RoundCap))
+        for i in range(6):
+            a = i * math.pi / 3 - math.pi / 2
+            p.drawLine(QPointF(26, 26),
+                       QPointF(26 + math.cos(a) * 17, 26 + math.sin(a) * 17))
+            for frac, seg in segs:
+                bx = 26 + math.cos(a) * 17 * frac
+                by = 26 + math.sin(a) * 17 * frac
+                for s in (-1, 1):
+                    sa = a + s * math.pi / 4
+                    p.drawLine(QPointF(bx, by),
+                               QPointF(bx + math.cos(sa) * seg,
+                                       by + math.sin(sa) * seg))
+        # 小尺寸不点花心：那一点在 16px 里只会把六条线糊在一起
+        if not small:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(colours['gold']))
+            p.drawEllipse(QPointF(26, 26), 3.4, 3.4)
     else:
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(colours['vermilion']))

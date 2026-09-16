@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import platform
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -359,6 +360,79 @@ def fs_mkdir(path: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════
+#  看图
+# ═══════════════════════════════════════════════════════════════
+
+def keep_image(name: str, dest: str = "") -> str:
+    """
+    把 QQ 中转目录里的图**复制**一份到沙箱，长期留着。
+
+    ★ 是复制不是移动，这是有意的：中转目录是「临时收件箱」，
+      它自己的那份 7 天后照删；沙箱里的这份副本归用户管，
+      清理只扫中转目录，碰不到它。
+      两边各管各的，谁也不影响谁。
+
+    ★ 为什么需要它：QQ 发来的图存在 data/qq_media/，7 天后自动删。
+      用户说「把这张图存到 xxx」时，光靠 fs_write 做不到 ——
+      它只能写文本，存不了二进制。
+    """
+    import re as _re
+
+    src_dir = M.ROOT / "data" / "qq_media"
+    want = (name or "").strip().strip("\"'")
+    if not want:
+        return "要给一个文件名。"
+
+    # 允许给完整文件名，也允许只给后半截（她看到的可能是我拼的那串）
+    cands = []
+    if src_dir.is_dir():
+        for f in src_dir.iterdir():
+            if f.is_file() and (f.name == want or f.name.endswith(want)
+                                or want in f.name):
+                cands.append(f)
+    if not cands:
+        return (f"中转目录里没有叫「{want}」的图。"
+                f"可能已经过期清掉了，或者名字记错了 —— 用 fs_list 看看 "
+                f"data/qq_media 里有什么。")
+
+    src = max(cands, key=lambda p: p.stat().st_mtime)
+    safe = _re.sub(r"[^\w.\-]", "_", src.name)[:80]
+    target, err = _sandbox(dest or f"QQ图片/{safe}")
+    if err:
+        return err
+    if target.is_dir():
+        target = target / safe
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, target)
+    except OSError as e:
+        return f"存不过去：{e}"
+    return f"存好了：{target}（{target.stat().st_size} 字节）"
+
+
+def see_image(path: str, question: str = "") -> str:
+    """
+    读一张图。走 SJTU 那个部署的 Qwen（vision.py），不是她自己的脑子 ——
+    DeepSeek 是纯文本的，图进去她只能干看着。
+
+    ★ **不设沙箱**：图可以在这台电脑的任何一个地方。理由是从对话窗拖进来的
+      文件本来就在各处（桌面、下载、截图文件夹），限制在 D:\\CXY 里等于
+      让拖图残废一半。
+
+      两道闸门替它把关：
+        1. vision.read 有后缀白名单 —— 不是图片一律拒，绝不上传。
+           （这条最要紧：它会把文件整份 base64 发到校外服务器，
+             没有它，see_image("secrets.json") 读不出内容但密钥已经出门了）
+        2. QQ 侧对非主人整个屏蔽掉这个工具，见 brain.build_payload 的 block。
+    """
+    import vision as V
+    raw = (path or "").strip().strip("\"'")
+    if not raw:
+        return "要给一个图片路径。"
+    return V.read(Path(raw).expanduser(), question)
+
+
+# ═══════════════════════════════════════════════════════════════
 #  工具定义（OpenAI / DeepSeek 格式）
 # ═══════════════════════════════════════════════════════════════
 
@@ -547,6 +621,55 @@ SPECS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "keep_image",
+            "description":
+                "把 QQ 发来的图存进本地，不让它过期消失。"
+                "QQ 收到的图放在中转目录里，7 天后自动删 —— 用户说"
+                "「这张图存下来」「放到某个文件夹」「留着以后看」时必须调它，"
+                "光用 fs_write 存不了图（那只能写文字）。"
+                "不确定文件的准确名字就先 fs_list 看一眼 data/qq_media。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string",
+                             "description": "中转目录里的文件名，可以只给后半截"},
+                    "dest": {"type": "string",
+                             "description":
+                                 "存到哪儿（沙箱内相对路径）。"
+                                 "留空就放 QQ图片/ 下，文件名照旧"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "see_image",
+            "description":
+                "看一张图。你自己是纯文本的，图里有什么必须调它才知道——"
+                "不要靠猜，也不要根据文件名编内容。"
+                "用户让你看某个截图/照片时用。"
+                "路径可以在这台电脑的任何地方（桌面、下载、截图文件夹都行），"
+                "不用非在 D:\\CXY 里。"
+                "★ 但只能看图片：别拿它去读 .json / .md / .txt 这类文件，"
+                "那不是它的用途，读了也只会被拒。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "图片的相对路径，比如 '截图/a.png'"},
+                    "question": {"type": "string",
+                                 "description":
+                                     "想问关于这张图的什么。留空就是「把图里的内容读出来」"},
+                },
+                "required": ["path"],
+            },
+        },
+    },
 ]
 
 from companion import SPECS as COMPANION_SPECS, tool_call as companion_tool_call
@@ -571,6 +694,8 @@ DISPATCH = {
     "fs_write": lambda a: fs_write(a.get("path", ""), a.get("content", ""),
                                     bool(a.get("append", False))),
     "fs_mkdir": lambda a: fs_mkdir(a.get("path", "")),
+    "see_image": lambda a: see_image(a.get("path", ""), a.get("question", "")),
+    "keep_image": lambda a: keep_image(a.get("name", ""), a.get("dest", "")),
 }
 
 
