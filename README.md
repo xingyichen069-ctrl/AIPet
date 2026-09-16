@@ -68,13 +68,30 @@ python src/brain.py chat              # 命令行对话
 
 它能调用的工具在 `src/local_tools.py`：
 
-| 工具 | 作用 | 哪些档位可用 |
-|---|---|---|
-| `get_time` | 当前日期时间、星期 | 全部 |
-| `get_system` | 电量、开机时长、系统 | 全部 |
-| `recall` | 检索记忆库 | 全部 |
-| `remember` | 写入记忆库 | 全部 |
-| `web_search` | 联网搜索 | 除省电档外（search=off） |
+| 工具 | 作用 |
+|---|---|
+| `get_time` | 当前日期时间、星期 |
+| `get_system` | 电量、开机时长、系统 |
+| `recall` | 检索记忆库 |
+| `remember` | 写入记忆库 |
+| `web_search` | 联网搜索（省电档关闭） |
+| `mood` | 心理点：`get` / `list` / `set` / `clear` / `log` |
+| `fs_list` `fs_read` | 列目录、读文本文件 |
+| `fs_write` `fs_mkdir` | 写文件（可追加）、建目录 |
+
+### 文件读写是沙箱的
+
+`fs_*` 四个工具**只能动 `D:\CXY` 里面的东西**。这是代码层拦的，不是靠她自觉：
+
+```
+读取/../../../AIPet/data/secrets.json   → 被拒
+D:/CXY/../AIPet/data/secrets.json       → 被拒（合法根 + 用 .. 钻出去）
+//?/C:/Windows                          → 被拒（设备路径）
+```
+
+带盘符的绝对路径如果不在沙箱里会**明确拒绝**，而不是剥成相对路径——否则「存到 D:\其他目录」会悄悄变成「存到 D:\CXY\其他目录」，你按自己说的路径去找什么都找不到。
+
+想换沙箱根，在 `data/config.json` 里加 `tools.fs_root`。
 
 带 `tools` 的请求，后续所有请求必须完整回传 `reasoning_content`，即使那轮没实际调用工具。不回传会 400，`brain.py` 已处理。
 

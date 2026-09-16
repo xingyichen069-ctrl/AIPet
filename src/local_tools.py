@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import platform
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -179,6 +180,14 @@ def mood(action: str = "get", key: str = "", hours: float = 0,
                              for k, v in MD.catalog().items())
         if a == "clear":
             return "散了。" if MD.clear("她自己收的") else "本来就没停在哪。"
+        if a == "log":
+            # ★ 每轮记一笔要走这儿，别拿 fs_write 自己拼 JSON。
+            #   实测踩过：SOUL.md 里那句"追加进 data/mood_log.jsonl"
+            #   没有配套工具，她就自己拼了一段写进 D:\CXY\data\ ——
+            #   沙箱路径和 mood.py 真正用的 AIPet\data\ 不是一个地方，
+            #   字段名也对不上（time/mood vs ts/key），等于白记。
+            row = MD.write_log(why or "", source="她自己")
+            return f"记下了：{row['key'] or '平常'}"
         if a == "set":
             if not key:
                 return "要给一个 key，先用 action=list 看。"
@@ -190,6 +199,163 @@ def mood(action: str = "get", key: str = "", hours: float = 0,
         return MD.status()
     except Exception as e:
         return f"心理点读写失败：{e}"
+
+
+# ═══════════════════════════════════════════════════════════════
+#  文件读写（沙箱）
+# ═══════════════════════════════════════════════════════════════
+
+# 模型只能在这个目录里动手。用户要的是「在 QQ 上指挥她往 D:\CXY 存东西」，
+# 所以根定在这儿。想改去 data/config.json 的 tools.fs_root。
+FS_ROOT = Path(r"D:\CXY")
+
+# 单次读写的上限。不设的话，读一个 100MB 的日志会直接把 prompt 撑爆 ——
+# 而且模型看不出"这是因为太大"，只会开始胡编。
+FS_READ_MAX = 200_000
+FS_WRITE_MAX = 200_000
+
+
+def _fs_root() -> Path:
+    """沙箱根。允许被 config 覆盖，读不到就用默认值。"""
+    p = M.ROOT / "data" / "config.json"
+    try:
+        r = (json.loads(p.read_text(encoding="utf-8")).get("tools") or {}).get("fs_root")
+        if r:
+            return Path(str(r)).expanduser().resolve()
+    except (OSError, json.JSONDecodeError, ValueError):
+        pass
+    try:
+        return FS_ROOT.resolve()
+    except OSError:
+        return FS_ROOT
+
+
+def _sandbox(rel: str) -> tuple[Path | None, str]:
+    """
+    把模型给的路径收进沙箱。收不进去就返回 (None, 原因)。
+
+    ★ 三道闸，缺一不可：
+      1. 他很可能照着用户的话写成 "D:\\CXY\\讲" 或 "CXY/讲" —— 先剥掉这层
+         前缀当相对路径，而不是直接拒。拒了他会换个写法接着试，很吵。
+      2. resolve() 之后必须仍在沙箱里 —— 这一步同时挡住 ".." 和符号链接。
+      3. 空字符串 = 沙箱根。
+    """
+    root = _fs_root()
+    raw = (rel or "").strip().strip("\"'")
+    s = raw.replace("\\", "/")
+    if s in ("", ".", "/"):
+        return root, ""
+
+    # ★ 带盘符的绝对路径：只收落在沙箱里的，不在就明确拒。
+    #   别把它剥成相对路径 —— 那样"存到 D:\其他目录"会悄悄变成
+    #   "存到 D:\CXY\其他目录"，用户按他说的路径去找，什么都找不到。
+    if re.match(r"^[A-Za-z]:", s):
+        try:
+            p = Path(raw).resolve()
+        except (OSError, RuntimeError) as e:
+            return None, f"这个路径解析不了：{e}"
+        if p != root and root not in p.parents:
+            return None, f"越界了。我只能动 {root} 里面的东西，碰不到 {rel}。"
+        return p, ""
+
+    # 无盘符：当成沙箱内的相对路径。"CXY/xxx" 这种照抄用户话的写法剥掉前缀。
+    s = s.lstrip("/")
+    for pre in ("CXY/", "cxy/"):
+        if s.startswith(pre):
+            s = s[len(pre):]
+            break
+
+    try:
+        target = (root / s).resolve()
+    except (OSError, RuntimeError) as e:
+        return None, f"这个路径解析不了：{e}"
+
+    if target != root and root not in target.parents:
+        return None, f"越界了。我只能动 {root} 里面的东西，碰不到 {rel}。"
+    return target, ""
+
+
+def fs_list(path: str = "") -> str:
+    """列目录。"""
+    target, err = _sandbox(path)
+    if err:
+        return err
+    if not target.exists():
+        return f"没有这个路径：{path or '（根目录）'}"
+    if target.is_file():
+        try:
+            return f"{target} 是个文件，不是目录（{target.stat().st_size} 字节）"
+        except OSError:
+            return f"{target} 是个文件"
+    try:
+        items = sorted(target.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
+    except OSError as e:
+        return f"列不了：{e}"
+
+    if not items:
+        return f"{target} 是空的"
+    rows = []
+    for p in items[:100]:
+        try:
+            rows.append(f"  {p.name}/" if p.is_dir() else f"  {p.name}  ({p.stat().st_size} 字节)")
+        except OSError:
+            rows.append(f"  {p.name}")
+    tail = f"\n（还有 {len(items) - 100} 项没列出来）" if len(items) > 100 else ""
+    return f"{target}（{len(items)} 项）：\n" + "\n".join(rows) + tail
+
+
+def fs_read(path: str) -> str:
+    """读文本文件。"""
+    target, err = _sandbox(path)
+    if err:
+        return err
+    if not target.exists():
+        return f"没有这个文件：{path}"
+    if target.is_dir():
+        return f"{path} 是目录，要看里面有什么该用 fs_list"
+    try:
+        n = target.stat().st_size
+        if n > FS_READ_MAX:
+            return (f"{path} 有 {n} 字节，超过单次读取上限 {FS_READ_MAX}。"
+                    f"告诉我你想从里面找什么，或者换个小的。")
+        text = target.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return f"读不了：{e}"
+    return f"{path}（{n} 字节）：\n{text}"
+
+
+def fs_write(path: str, content: str = "", append: bool = False) -> str:
+    """写文本文件。父目录不存在会自动建。"""
+    target, err = _sandbox(path)
+    if err:
+        return err
+    if target.is_dir():
+        return f"{path} 是目录，不能当文件写"
+    data = content or ""
+    size = len(data.encode("utf-8"))
+    if size > FS_WRITE_MAX:
+        return f"内容有 {size} 字节，超过单次写入上限 {FS_WRITE_MAX}。分几次写。"
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, "a" if append else "w", encoding="utf-8", newline="\n") as f:
+            f.write(data)
+    except OSError as e:
+        return f"写不了：{e}"
+    return f"已{'追加到' if append else '写入'} {target}（{size} 字节）"
+
+
+def fs_mkdir(path: str) -> str:
+    """建目录。"""
+    target, err = _sandbox(path)
+    if err:
+        return err
+    if target.exists():
+        return f"已经有了：{target}"
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return f"建不了：{e}"
+    return f"已建 {target}"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -295,8 +461,9 @@ SPECS = [
                 "type": "object",
                 "properties": {
                     "action": {"type": "string",
-                               "enum": ["get", "list", "set", "clear"],
-                               "description": "默认 get"},
+                               "enum": ["get", "list", "set", "clear", "log"],
+                               "description": "默认 get。log = 每轮回完记一笔"
+                                              "（由头写在 why 里，见 SOUL.md 那条规矩）"},
                     "key": {"type": "string",
                             "description":
                                 "状态名：起雾 / 软毛 / 低电量 / 手痒 / 较真 / 偏心 / 走神"},
@@ -311,6 +478,72 @@ SPECS = [
                             "（'可爱一点''正常点''收一收'这类）。他有权。",
                     },
                 },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_list",
+            "description":
+                f"列出本地沙箱目录里的内容。用户让你看看某个文件夹有什么、"
+                f"或者你不确定东西放哪了时用。只能看 {FS_ROOT} 里面的。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "相对路径，比如 '讲' 或 '讲/照片'。留空 = 根目录"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_read",
+            "description":
+                f"读本地的一个文本文件。用户让你看看文件里写了什么时用。"
+                f"只能读 {FS_ROOT} 里面的。图片、压缩包这类读不出文字内容，别拿它试。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "相对路径"},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_write",
+            "description":
+                f"把文字写进本地的文本文件。用户让你记录、整理、保存内容时用。"
+                f"父目录不存在会自动建。只能写 {FS_ROOT} 里面的。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "相对路径，比如 '讲/笔记.md'"},
+                    "content": {"type": "string", "description": "要写入的正文"},
+                    "append": {"type": "boolean",
+                               "description": "true = 追加到文件末尾；默认 false = 覆盖"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_mkdir",
+            "description": f"在沙箱里建一个目录。只能建在 {FS_ROOT} 里面。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "相对路径"},
+                },
+                "required": ["path"],
             },
         },
     },
@@ -333,6 +566,11 @@ DISPATCH = {
     "remember": lambda a: remember(a.get("text", ""), a.get("importance", 3),
                                    a.get("tags", ""), a.get("decay", "normal"),
                                    a.get("speaker", "owner")),
+    "fs_list": lambda a: fs_list(a.get("path", "")),
+    "fs_read": lambda a: fs_read(a.get("path", "")),
+    "fs_write": lambda a: fs_write(a.get("path", ""), a.get("content", ""),
+                                    bool(a.get("append", False))),
+    "fs_mkdir": lambda a: fs_mkdir(a.get("path", "")),
 }
 
 
