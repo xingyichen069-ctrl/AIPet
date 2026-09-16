@@ -2,7 +2,7 @@
 
 一个住在电脑桌面上的角色。没有声音，只有文字。
 
-当前版本 `0.4.0-beta.6`。改动见 [CHANGELOG.md](CHANGELOG.md)，版本与回退见 [版本管理](docs/版本管理.md)。对话接续、约定提醒、安静陪伴等增强功能见 [新增功能说明](新增功能说明.md)。
+当前版本 `0.4.0-beta.7`。改动见 [CHANGELOG.md](CHANGELOG.md)，版本与回退见 [版本管理](docs/版本管理.md)。对话接续、约定提醒、安静陪伴等增强功能见 [新增功能说明](新增功能说明.md)。
 
 ## 先跑起来
 
@@ -317,6 +317,29 @@ python src/pet.py                          # 需要 PySide6
 - `compression.daily_to_weekly_after_days` 多久开始压缩
 - `privacy.blocked_patterns` 加你自己的隐私词
 
+## 版本与更新
+
+当前版本号在根目录 `VERSION`，那是**唯一说了算的地方**。`CHANGELOG.md` 和这份 README 里也写着版本号，但那是给人看的 —— 它们漏改过，别再拿它们当依据。
+
+查有没有新版本，两个入口：
+
+| 在哪 | 怎么查 |
+|---|---|
+| 桌宠 | 右键 → 高级 → 检查更新 |
+| QQ | 主人发 `/版本`（或「更新」「/update」），别人发会被拒 |
+
+**它只查，不下载也不覆盖任何文件。** 有新版就报版本号、给一个下载页，装不装是你的事。
+
+不做自动更新是有意的：这套在本机是拷贝而不是 git 检出，「自动更新」只能是下载源码 zip 覆盖一遍 —— 覆盖到一半失败，或者新版本自己带着 bug，桌宠当场就坏。拿这个换省一次点击，不划算。
+
+只在手动点的时候查，平时零网络请求。请求走 `proxy.py` 检测到的代理（SOCKS 走 PySocks）。查的是 GitHub 的 tag 列表，未登录每小时 60 次，手动查够用。
+
+fork 出去想查自己的，在 `data/config.json` 里加：
+
+```json
+{ "update": { "repo": "你的名字/AIPet" } }
+```
+
 ## QQ
 
 自建的网关客户端，不依赖第三方框架。凭据放在 `data/secrets.json`，用 `tools/qq_ctl.py` 管理：
@@ -359,6 +382,7 @@ AIPet/
 │   ├── thinking.py         思考强度引擎
 │   ├── live2d_widget.py    Live2D 渲染组件
 │   ├── local_tools.py      它能调用的本地工具
+│   ├── update.py           查有没有新版本
 │   ├── mcp_server.py       MCP server
 │   └── ...
 │

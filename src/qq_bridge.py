@@ -462,10 +462,27 @@ LEVEL_ORDER = ("auto", "frugal", "daily", "serious", "deep", "max")
 
 CMD_RE = re.compile(r"^[/／]?(档位|思考|level|thinking)\s*[:：]?\s*(\S*)$", re.I)
 
+# 查更新。不带参数，所以正则收紧到结尾 —— 「更新一下记忆」不能被它吃掉。
+# 同样只认主人：这个要真去连 GitHub，群里谁都能发就成了公共出口。
+VER_RE = re.compile(r"^[/／]?(版本|更新|检查更新|version|update)\s*[:：]?\s*$", re.I)
+
 
 def command_reply(ev: QB.QQEvent, who: dict) -> str | None:
     """认一下是不是指令。不是就返回 None。"""
-    m = CMD_RE.match((ev.content or "").strip())
+    text = (ev.content or "").strip()
+
+    if VER_RE.match(text):
+        if not who.get("is_owner"):
+            return "这个只有他能调。"
+        import update as UP
+        r = UP.check()
+        log(f"查更新（{ev.scene} by {who['name']!r}）→ "
+            + (f"有新版 {r['latest_clean']}" if r.get("newer")
+               else ("已是最新" if r.get("ok") else f"没查成：{r.get('error')}")))
+        # ★ 结论里不许出现 URL（QQ 会拒收整条），describe() 已经保证这点。
+        return UP.describe(r)
+
+    m = CMD_RE.match(text)
     if not m:
         return None
     if not who.get("is_owner"):

@@ -264,6 +264,27 @@ class ProxyProbe(QThread):
             self.done.emit(f"ERR:{e}")
 
 
+class UpdateCheck(QThread):
+    """
+    后台问一次 GitHub 有没有新版本。
+
+    必须开线程：那次请求要过代理、要等 GitHub 回，几秒钟。
+    在主线程里做，右键菜单会当场僵住。
+
+    ★ 它只查，不下载也不覆盖 —— 见 update.py 开头那段。
+    """
+    done = Signal(dict)         # update.check() 的结果
+
+    def run(self):
+        try:
+            import update as UP
+            self.done.emit(UP.check())
+        except Exception as e:
+            self.done.emit({"ok": False, "current": "", "latest": "", "latest_clean": "",
+                            "newer": False, "url": "",
+                            "error": f"{type(e).__name__}: {e}"})
+
+
 class BrainWorker(QThread):
     """在后台线程里调 API，避免阻塞界面。"""
     chunk = Signal(str, str)     # (kind, text)  kind: content / reasoning / error
@@ -914,6 +935,7 @@ class PetWindow(QWidget):
         self.chat: ChatWindow | None = None
         self.proxy_url: str = ""
         self.prober: ProxyProbe | None = None
+        self.updater: UpdateCheck | None = None
         self._restore_pos()
         self._watch_config()
         self.companion = CompanionController(self)
@@ -944,6 +966,44 @@ class PetWindow(QWidget):
             return
         # 用 SOUL 的语气说一句，不报参数
         self.show_bubble("网络走代理了。" if result else "网线直着，也行。", 2400)
+
+    # ── 检查更新 ────────────────────────────────────────────────
+    # 只在手动点的时候查，平时零网络请求。查到有新版也不自己下 ——
+    # 只给版本号和下载页，更不更新是人的事（update.py 开头写了为什么）。
+
+    def _check_update(self):
+        if self.updater and self.updater.isRunning():
+            self.show_bubble("还在查呢。", 1600)
+            return
+        self.show_bubble("去看一眼。", 1600)
+        self.updater = UpdateCheck(self)
+        self.updater.done.connect(self.on_update_done)
+        self.updater.start()
+
+    def on_update_done(self, r: dict):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtWidgets import QMessageBox
+
+        if not r.get("ok"):
+            QMessageBox.warning(self, "检查更新", f"没查成。\n\n{r.get('error', '')}")
+            return
+        if not r.get("newer"):
+            QMessageBox.information(self, "检查更新",
+                                    f"已经是最新的了。\n\n本机 {r['current']}。")
+            return
+
+        box = QMessageBox(self)
+        box.setWindowTitle("检查更新")
+        box.setText(f"有新版本 {r['latest_clean']}。")
+        box.setInformativeText(
+            f"本机是 {r['current']}。\n\n"
+            f"这里不会替你下载或覆盖任何东西 —— 打开下载页，你自己决定。")
+        go = box.addButton("打开下载页", QMessageBox.AcceptRole)
+        box.addButton("以后再说", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is go:
+            QDesktopServices.openUrl(QUrl(r["url"]))
 
     # ---------------------------------------------------------- 对话窗口
 
@@ -1183,6 +1243,7 @@ class PetWindow(QWidget):
             a.setChecked(self.state.get(key, key != "click_through"))
             a.triggered.connect(callback)
         advanced.addAction("重新检测代理", lambda: self.probe_proxy(announce=True))
+        advanced.addAction("检查更新", self._check_update)
         if self.gl:
             advanced.addAction("重载 Live2D 模型", self._reload_model)
         advanced.addAction("打开配置文件", self._open_config)
@@ -1235,7 +1296,8 @@ class PetWindow(QWidget):
         if getattr(self, "_quitting", False):
             return
         self._quitting = True
-        workers = [w for w in (self.chat.worker if self.chat else None, self.prober)
+        workers = [w for w in (self.chat.worker if self.chat else None,
+                               self.prober, self.updater)
                    if w and w.isRunning()]
         if not workers:
             QApplication.quit()
