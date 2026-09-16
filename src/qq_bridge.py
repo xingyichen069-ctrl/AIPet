@@ -364,9 +364,9 @@ def read_images(ev: QB.QQEvent) -> str:
       实测那条 url 长这样：
         https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=...&rkey=...&spec=0
 
-    ★ 读图走 SJTU 那个部署（vision.py），**不是她的脑子** ——
-      DeepSeek 是纯文本的。所以群里发的图也会经过校外服务器，
-      这一点在 小日和辅助（SJTU AI）/README.md 里写过。
+    ★ 读图走 vision.py 配的那个接口，**不是她的脑子** —— DeepSeek 是纯文本的。
+      所以群里任何人发的图都会经过那个服务商，和本地记忆不是一回事。
+      配之前先想清楚你要把它指向哪里。
     """
     imgs = ev.images
     if not imgs:
@@ -609,7 +609,7 @@ class Bridge:
         prompt = build_prompt(ev, who)
         try:
             # ★ 非主人不给 see_image。那个工具会把整个文件 base64 之后
-            #   发到校外服务器（读图走的是 SJTU 的部署），群里任何人
+            #   发到 vision.py 配的那个服务（可能是外部的），群里任何人
             #   都不该有这个口子 —— 一句"看看 D:\某文件.png"就够把东西送出去。
             #   主人的记忆里有这条规矩，但记忆是说服，这里是拦。
             blocked = None if who["is_owner"] else {"see_image"}

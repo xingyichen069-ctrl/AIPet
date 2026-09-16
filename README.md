@@ -2,7 +2,7 @@
 
 一个住在电脑桌面上的角色。没有声音，只有文字。
 
-当前版本 `0.4.0-beta.5`。改动见 [CHANGELOG.md](CHANGELOG.md)，版本与回退见 [版本管理](docs/版本管理.md)。对话接续、约定提醒、安静陪伴等增强功能见 [新增功能说明](新增功能说明.md)。
+当前版本 `0.4.0-beta.6`。改动见 [CHANGELOG.md](CHANGELOG.md)，版本与回退见 [版本管理](docs/版本管理.md)。对话接续、约定提醒、安静陪伴等增强功能见 [新增功能说明](新增功能说明.md)。
 
 ## 先跑起来
 
@@ -79,8 +79,39 @@ python src/brain.py chat              # 命令行对话
 | `mood` | 心理点：`get` / `list` / `set` / `clear` / `log` |
 | `fs_list` `fs_read` | 列目录、读文本文件 |
 | `fs_write` `fs_mkdir` | 写文件（可追加）、建目录 |
-| `see_image` | 看图片 —— 走 SJTU 的 Qwen，因为她自己的脑子是纯文本的 |
+| `see_image` | 看图片 —— 走你自己配的视觉接口，因为她自己的脑子是纯文本的 |
 | `keep_image` | 把 QQ 发来的图存进沙箱，免得被定期清理 |
+
+### 看图要自己配一个接口
+
+`see_image` 和 `keep_image` 走的是 `src/vision.py`，它**不绑定任何一家服务**。她自己的脑子（DeepSeek）是纯文本的，图进去只能干看着，所以需要一个带视觉的模型把图读成文字。
+
+只要对方是 **OpenAI 兼容的 `/chat/completions`，并且支持 `image_url` 这种消息格式**就能接：
+
+| 场景 | 例子 |
+|---|---|
+| 本机跑 | Ollama、vLLM、LM Studio —— 图不出本机 |
+| 云上 | 各家多模态 API |
+| 学校 / 公司部署 | 自己的内网 endpoint |
+
+在 `data/secrets.json` 里填三个值：
+
+```json
+{
+  "vision_base_url": "https://你的服务/v1",
+  "vision_api_key": "对方的 key",
+  "vision_model": "qwen-vl / gpt-4o / llava"
+}
+```
+
+本地部署通常不校验 key，随便填个非空串就行。**没配就是不会看图** —— 她会照实说看不了，不会编一张图出来。
+
+```bash
+python src/vision.py            # 自检：现场造一张有字的图，真调一次
+python src/vision.py 看图 <路径>
+```
+
+**配之前先想清楚图会发到哪里。** 读图是把整份文件 base64 编码后 POST 出去的：本地模型不出机器，云服务就是出门了。群聊里别人发的图走的是同一条路。
 
 ### 文件读写是沙箱的，看图不是
 
@@ -101,7 +132,7 @@ D:/CXY/../AIPet/data/secrets.json       → 被拒（合法根 + 用 .. 钻出�
 - **后缀白名单** —— 不是图片一律拒
 - **文件头魔数** —— 后缀能改，内容改不了。文本改名成 `.png` 也过不去
 
-这两条是必须的：读图会**把整份文件 base64 发到校外服务器**（SJTU 的部署），没有它们，`see_image("secrets.json")` 读不出内容但密钥已经出门了。
+这两条是必须的：读图会**把整份文件 base64 发到 vision.py 配的那个服务**（可能是外部的），没有它们，`see_image("secrets.json")` 读不出内容但密钥已经出门了。
 
 **QQ 那边，非主人用不了 `see_image`** —— 工具在调模型之前就被摘掉了。主人的记忆里有这条规矩，但记忆是说服，这里是拦。
 

@@ -7,25 +7,32 @@ vision.py —— 让小日和能看图
 ═══════════════════════════════════════════════════════════════
 
 小日和的脑子（brain.py）走的是 DeepSeek，**那是纯文本的**，
-图片进去她只能干看着。这个文件用 SJTU 校园部署的 Qwen 补上这块。
+图片进去她只能干看着。这个文件接一个**带视觉的模型**补上这块。
 
 **它不参与对话。** 只干一件事：把图里的东西读成文字，交回给 brain。
 所以这里没有人格、没有记忆、没有工具循环——就是个读图函数。
 
-分离的另一个理由：换部署、换模型、换 endpoint，只动这一个文件。
+分离的另一个理由：换服务、换模型、换 endpoint，只动这一个文件。
 
 ═══════════════════════════════════════════════════════════════
-  凭据
+  配哪家的都行
 ═══════════════════════════════════════════════════════════════
 
-data/secrets.json：
+只要对方是 **OpenAI 兼容的 `/chat/completions`，并且支持 `image_url`
+这种消息格式**，就能接。本地跑的（Ollama、vLLM、LM Studio）、
+云上的（各家多模态 API）、自己学校或公司部署的，都行。
 
-    sjtu_api_key         sk-...
-    sjtu_base_url        https://models.sjtu.edu.cn/api/v1
-    sjtu_vision_model    qwen3.8-27b
+data/secrets.json 里填三个值：
 
-没配就是「不会看图」，不是报错——她会照实说自己看不了，
+    vision_base_url      到 /v1 为止，比如 https://你的服务/v1
+    vision_api_key       对方的 key（本地部署通常不校验，填任意非空串）
+    vision_model         模型名，比如 qwen-vl / gpt-4o / llava
+
+**没配就是「不会看图」，不是报错**——她会照实说自己看不了，
 不会编一张图出来（BOUNDARIES.md 那条）。
+
+> 怎么确认对方支不支持读图：拿一张有字的图调一次，
+> 能读出内容就行。只支持纯文本的接口会报参数错误。
 
 ═══════════════════════════════════════════════════════════════
   用法
@@ -85,9 +92,9 @@ def load_secrets() -> dict:
 def config() -> dict:
     d = load_secrets()
     return {
-        "key": d.get("sjtu_api_key", ""),
-        "base": (d.get("sjtu_base_url") or "").rstrip("/"),
-        "model": d.get("sjtu_vision_model") or "qwen3.8-27b",
+        "key": d.get("vision_api_key", ""),
+        "base": (d.get("vision_base_url") or "").rstrip("/"),
+        "model": d.get("vision_model") or "",
     }
 
 
@@ -95,7 +102,10 @@ def available() -> tuple[bool, str]:
     """能不能看图。第二个返回值是原因，不能看时给她照实说。"""
     c = config()
     if not c["base"] or not c["key"]:
-        return False, "没配读图的凭据（data/secrets.json 里缺 sjtu_api_key / sjtu_base_url）"
+        return False, ("没配读图的接口（data/secrets.json 里缺 "
+                       "vision_base_url / vision_api_key）")
+    if not c["model"]:
+        return False, "没填 vision_model（要一个带视觉的模型名）"
     return True, ""
 
 
@@ -215,8 +225,18 @@ def selftest() -> int:
     check("不存在的文件给说明而不是异常",
           "找不到" in read(M.ROOT / "不存在的图.png"))
 
-    check("目录不会被当成图",
-          "是目录" in read(M.ROOT / "src"))
+    # ★ 目录名要带图片后缀才走得到 is_dir 那条分支。
+    #   用 src/ 这种没后缀的目录测，会在第一道闸门（后缀白名单）就被拒，
+    #   结果是这条用例永远绿 —— 测的不是它说自己在测的东西。
+    dir_like = M.ROOT / "data" / "cache" / "_vision_selftest_dir.png"
+    try:
+        dir_like.mkdir(parents=True, exist_ok=True)
+        check("目录不会被当成图", "是目录" in read(dir_like))
+    finally:
+        try:
+            dir_like.rmdir()
+        except OSError:
+            pass
 
     if not ok:
         print("\n没配凭据，跳过真调。")

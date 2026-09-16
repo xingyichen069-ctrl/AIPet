@@ -412,7 +412,7 @@ def keep_image(name: str, dest: str = "") -> str:
 
 def see_image(path: str, question: str = "") -> str:
     """
-    读一张图。走 SJTU 那个部署的 Qwen（vision.py），不是她自己的脑子 ——
+    读一张图。走 vision.py 配的那个视觉接口，不是她自己的脑子 ——
     DeepSeek 是纯文本的，图进去她只能干看着。
 
     ★ **不设沙箱**：图可以在这台电脑的任何一个地方。理由是从对话窗拖进来的
