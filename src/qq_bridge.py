@@ -38,6 +38,8 @@ QQ 规定被动回复必须**5 分钟内**发出，否则吃 40034128。
 
 from __future__ import annotations
 
+import json
+import re
 import sys
 import threading
 import time
@@ -353,6 +355,60 @@ def claim_reply(ev: QB.QQEvent, who: dict) -> str | None:
 
 
 # ═══════════════════════════════════════════════════════════════
+#  指令口
+# ═══════════════════════════════════════════════════════════════
+
+# ★ 只在主人那儿开。群里谁都能发的话，档位就成了公共设施；
+#   而且 deep/max 在群里还会拖长响应，更容易撞 40034128。
+LEVEL_ALIAS = {
+    "auto": "auto", "自动": "auto",
+    "frugal": "frugal", "省电": "frugal",
+    "daily": "daily", "日常": "daily",
+    "serious": "serious", "认真": "serious",
+    "deep": "deep", "深究": "deep",
+    "max": "max", "极限": "max",
+}
+LEVEL_ORDER = ("auto", "frugal", "daily", "serious", "deep", "max")
+
+CMD_RE = re.compile(r"^[/／]?(档位|思考|level|thinking)\s*[:：]?\s*(\S*)$", re.I)
+
+
+def command_reply(ev: QB.QQEvent, who: dict) -> str | None:
+    """认一下是不是指令。不是就返回 None。"""
+    m = CMD_RE.match((ev.content or "").strip())
+    if not m:
+        return None
+    if not who.get("is_owner"):
+        return "这个只有他能调。"
+
+    import thinking as T
+    names = {"auto": "自动"}
+    for k, v in T.load().get("presets", {}).items():
+        names[k] = v.get("name", k)
+    opts = "、".join(names.get(k, k) for k in LEVEL_ORDER)
+
+    arg = (m.group(2) or "").strip().lower()
+    if not arg:
+        cur = T.current_level()
+        return f"现在是「{names.get(cur, cur)}」\n可选：{opts}"
+
+    lv = LEVEL_ALIAS.get(arg)
+    if not lv:
+        # ★ 认不出来就交回模型，别自作主张回"没这个档位"。
+        #   实测过："档位是什么意思"这种正常提问会被它吃掉，
+        #   然后答非所问。宁可漏一个打错字的提示。
+        return None
+
+    old = T.current_level()
+    T.set_level(lv)
+    log(f"档位 {old} → {lv}（{ev.scene} by {who['name']!r}）")
+    # ★ 群里那条消息本身仍走 daily（见文件头），得说清楚，
+    #   不然他调完发现"没反应"，会以为是坏的。
+    tail = "\n群里还是走日常档（怕超时），这条对单聊和桌宠生效。" if ev.scene == "group" else ""
+    return f"好，切到「{names.get(lv, lv)}」。{tail}"
+
+
+# ═══════════════════════════════════════════════════════════════
 #  主流程
 # ═══════════════════════════════════════════════════════════════
 
@@ -414,6 +470,13 @@ class Bridge:
             hist_append(conv_key(ev), "assistant", "", c)
             return
 
+        # 指令口。也排在喂模型前面 —— 指令不是聊天内容。
+        c = command_reply(ev, who)
+        if c is not None:
+            self._send(ev, c)
+            hist_append(conv_key(ev), "assistant", "", c)
+            return
+
         if ev.content.strip().lower() in IGNORE_EXACT:
             log("低信息量，不回")
             return
@@ -462,6 +525,15 @@ class Bridge:
 
         # ── 记 ──
         self._remember(ev, who, reply)
+        self._log_mood(ev)
+
+    def _log_mood(self, ev: QB.QQEvent) -> None:
+        """每轮回完落一行当时的状态。规矩写在 SOUL.md 里。"""
+        try:
+            import mood as MD
+            MD.write_log(ev.content, source=f"qq:{ev.scene}")
+        except Exception as e:
+            log(f"mood 日志出错：{type(e).__name__}: {e}")
 
     def _send(self, ev: QB.QQEvent, text: str) -> None:
         clean, notes = QT.sanitize(text)
@@ -527,6 +599,9 @@ def selftest() -> int:
     print("QQ 桥接自检（灌假事件，不联网）\n")
 
     bp, bq = P.snapshot(), P.qq_snapshot()
+    # 记忆库整份原样快照，收尾时原样写回（见 finally 里的说明）
+    _jf = M._p("journal")
+    _journal_before = _jf.read_bytes() if _jf.exists() else None
     try:
         P.save({**P._blank_people()})
         P.save_qq(P._blank_qq())
@@ -684,8 +759,43 @@ def selftest() -> int:
     finally:
         P.save(bp)
         P.save_qq(bq)
-        kept = [e for e in M.load_journal() if e.get("source") != "qq"]
-        M.save_journal(kept)
+        # ★ 用「原样快照 + 原样还原」，不要用条件过滤。
+        #
+        #   踩过的坑（真丢过数据）：原来这里写的是
+        #       kept = [e for e in M.load_journal() if e.get("source") != "qq"]
+        #       M.save_journal(kept)
+        #   两个问题叠在一起：
+        #     1. 真实 QQ 对话的记忆 source 也是 "qq"，一起被删了。
+        #     2. M.load_journal() 本身还会过滤掉用户「撤回并忘记」的条目，
+        #        用它的结果去 save_journal，等于把那些条目从磁盘上永久抹掉。
+        #   测试要清理的是**它自己写进去的东西**，不是"看起来像测试的东西"。
+        _raw = M._p("journal")
+        if _journal_before is None:
+            try:
+                _raw.unlink()
+            except OSError:
+                pass
+        else:
+            _raw.write_bytes(_journal_before)
+
+        # ★ 永久守卫：确认**原来有的记忆一条都没少**。
+        #   这条比"测试通过了"重要 —— 原来就是测试全绿、记忆却少了 4 条。
+        #
+        #   注意判据是"旧条目没消失"，不是"逐字节相同"：
+        #   QQ 桥可能正在线上跑，这期间它会正常追加新记忆。
+        #   追加是对的，丢条目才是 bug。拿字节相等去判会误报。
+        def _rows(b):
+            if not b:
+                return []
+            return [json.loads(l) for l in b.decode("utf-8").splitlines() if l.strip()]
+
+        _old = _rows(_journal_before)
+        _new_ids = {e["id"] for e in _rows(_raw.read_bytes() if _raw.exists() else None)}
+        _lost = [e for e in _old if e["id"] not in _new_ids]
+        check("★ 自检没有删掉任何原有记忆",
+              not _lost,
+              f"原有 {len(_old)} 条，现在 {len(_new_ids)} 条"
+              + (f"，丢了 {[e['id'] for e in _lost]}" if _lost else ""))
 
     print(f"\n{'全部通过' if fails == 0 else str(fails) + ' 项失败'}")
     return 1 if fails else 0

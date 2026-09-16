@@ -64,6 +64,9 @@ if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("
 
 MOOD_FILE = M.ROOT / "data" / "mood.json"
 
+# 每轮回完追加一行。只追加不轮转 —— 一年也就几万行，翻得动。
+MOOD_LOG = M.ROOT / "data" / "mood_log.jsonl"
+
 # 剩余时间少于这个比例时进入淡出期
 FADE_RATIO = 0.25
 
@@ -466,6 +469,31 @@ def clear(why: str = "manual") -> bool:
     cur["why"] = f"{cur.get('why','')}［{why}］".strip()
     _retire(cfg, cur)
     return True
+
+
+def write_log(said: str = "", source: str = "qq") -> dict:
+    """
+    每轮回完写一行，记下当时停在哪。
+
+    ★ 没停在任何状态也要写，key 记 None。
+      只记"换状态"的话看不出密度，而这东西的用处恰恰是事后翻：
+      为什么这个月老在走神、哪类话最容易让她退远。
+    """
+    cur = active()
+    row = {
+        "ts": M.now_iso(),
+        "key": cur["key"] if cur else None,
+        "why": (cur.get("why") or "") if cur else "",
+        "source": source,
+        "said": (said or "").strip().replace("\n", " ")[:80],
+    }
+    try:
+        MOOD_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(MOOD_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError:
+        pass        # 日志写不进去不该影响回话
+    return row
 
 
 # ═══════════════════════════════════════════════════════════════
