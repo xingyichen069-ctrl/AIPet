@@ -44,7 +44,9 @@ pet.py —— 桌面端角色窗口 + 思考强度控制面板
 from __future__ import annotations
 
 import json
+import os
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -241,6 +243,12 @@ def live2d_ready() -> bool:
     if not (HAS_LIVE2D and L2D_CFG.get("enabled", False)):
         return False
     return (M.ROOT / L2D_CFG.get("model", "")).exists()
+
+
+# ★ 等 worker 收尾的上限（秒）。超了就走 os._exit，不再等 ——
+#   brain.stream 的取消点只在数据块之间，一次卡住的 urlopen 要等 30 秒
+#   socket 超时，没有上限的话窗口就僵在那儿，看起来是"退出没反应"。
+QUIT_GRACE_S = 5.0
 
 
 class ProxyProbe(QThread):
@@ -1293,24 +1301,47 @@ class PetWindow(QWidget):
         self.companion.tick()
 
     def quit_safely(self):
+        """
+        退出。第二次点会直接硬退，不再等。
+
+        ★ 原来这里只等 worker 自己停，**没有上限**，于是"退不掉"：
+          取消信号只在两个数据块之间才被看到（brain.stream 里的取消点都在
+          循环头），一次 urlopen 卡住就得等 socket 超时 —— 30 秒。
+          这期间窗口停在那儿，再点退出会被开头那个 _quitting 判断直接
+          return 掉，什么都发生不了。看起来就是死了。
+
+          现在两道保障：等满 QUIT_GRACE_S 就走 os._exit；中途再点一次
+          也走 os._exit。os._exit 跳过清理，所以只在等不到的时候用 ——
+          记忆、草稿、状态都是随手写盘的，丢不了什么。
+        """
         if getattr(self, "_quitting", False):
-            return
+            os._exit(0)                     # 第二次点 = 不等了
         self._quitting = True
+
         workers = [w for w in (self.chat.worker if self.chat else None,
                                self.prober, self.updater)
                    if w and w.isRunning()]
         if not workers:
             QApplication.quit()
             return
+
         for worker in workers:
             worker.requestInterruption()
         if self.chat:
-            self.chat.head.setText("正在结束请求…")
+            self.chat.head.setText(f"正在结束请求…（最多等 {QUIT_GRACE_S:g} 秒，再点一次退出就直接关）")
             self.chat.input.setEnabled(False)
             self.chat.btn.setEnabled(False)
+
+        deadline = time.monotonic() + QUIT_GRACE_S
+
+        def tick():
+            if not any(w.isRunning() for w in workers):
+                QApplication.quit()
+            elif time.monotonic() >= deadline:
+                os._exit(0)                 # worker 卡在网络里，等不到了
+
         self._quit_timer = QTimer(self)
-        self._quit_timer.timeout.connect(
-            lambda: QApplication.quit() if not any(w.isRunning() for w in workers) else None)
+        self._quit_timer.timeout.connect(tick)
         self._quit_timer.start(100)
 
     def _set_level(self, key: str):
