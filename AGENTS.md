@@ -8,4 +8,6 @@
 - `.gitignore` 中的密钥、档案、人格、记忆、运行环境和旧备份保留在本机；不强行加入代码提交，也不清理这些文件。
 - Git 仓库先保留在本地；没有用户请求时不创建远程仓库、不推送、不上传附件。
 - 回退默认在独立目录导出旧版本供比较，不覆盖当前私人数据，不使用破坏性清理命令。
+- `.bat` 文件保持**纯 ASCII 注释 + CRLF 换行**。cmd.exe 按字节偏移读批处理文件，中文注释或 LF 换行都会让它把注释的碎片当命令执行，出现一串 `'xxx' 不是内部或外部命令`。`.gitattributes` 里的 `*.bat text eol=crlf` 只管 git 怎么分发，管不了本地工作区那份 —— 新建的 bat 要自己转 CRLF。省事的办法是把所有中文交给 Python 输出，bat 里一个非 ASCII 字节都不留。
+- 版本号以 `VERSION` 为准，`README.md` 和 `CHANGELOG.md` 里的是给人看的，三处一起改。
 - 纯外观修改优先更新 `themes/appearance.json` 和 `themes/custom.qss`，它们会在运行时自动重载。用户字号与通透度偏好留在被忽略的 `data/appearance.json`。

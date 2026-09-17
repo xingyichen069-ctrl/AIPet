@@ -2,7 +2,7 @@
 from datetime import datetime
 
 THEME_NAMES = {
-    'touhou': '东方 · 朱色结界',
+    'touhou': '博丽灵梦 · 朱色结界',   # 键名不动：它存在 appearance.json 里，改了旧设置会读不出来
     'marisa': '雾雨魔理沙 · 星屑魔法',
     'koishi': '古明地恋 · 无意识之庭',
     'cirno': '琪露诺 · 冰晶雾湖',
