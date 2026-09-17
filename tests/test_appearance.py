@@ -89,9 +89,13 @@ class AppearanceTests(unittest.TestCase):
         pet.state, pet.gl = {}, None
         pet.companion = Mock()
         pet.companion.store.focus.return_value = False
+        # ★ 这个列表要跟着 _build_menu 走：菜单里 addAction 接了哪个 self.方法，
+        #   这里就得桩上哪个。漏一个，用例会以 AttributeError 挂掉，而报错信息
+        #   （"'QWidget' object has no attribute ..."）看不出是漏桩，像代码坏了。
         for name in ('open_chat', '_start_company', '_open_memory_view', '_show_people',
                      '_toggle_panel', '_set_level', '_toggle_click_through', '_toggle_topmost',
-                     '_toggle_focus_timer', 'probe_proxy', '_open_config', 'quit_safely'):
+                     '_toggle_focus_timer', 'probe_proxy', '_check_update',
+                     '_open_config', 'quit_safely'):
             setattr(pet, name, Mock())
         with patch('pet.QQ_STATUS', return_value={'label': 'QQ 未连接', 'state': 'off'}), patch('pet.T.load', return_value={}):
             menu = PetWindow._build_menu(pet)

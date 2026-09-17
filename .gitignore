@@ -9,6 +9,7 @@ __pycache__/
 .env.*
 data/*
 !data/thinking.json
+!data/config.example.json
 persona/
 memory/
 knowledge/

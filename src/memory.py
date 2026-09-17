@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
 import uuid
 import contextvars
 import re
@@ -59,7 +60,31 @@ ACTIVE_MESSAGE = contextvars.ContextVar("aipet_message", default=None)
 # ---------------------------------------------------------------- 配置
 
 def load_config() -> dict:
-    with open(ROOT / "data" / "config.json", encoding="utf-8") as f:
+    """
+    读 data/config.json。
+
+    ★ 文件不存在就先拿 data/config.example.json 播种一份出来。
+      以前这里是直接 open()，而仓库里既没有 config.json、也没有任何地方
+      会创建它 —— 结果是 clone 下来第一件事就是 FileNotFoundError，
+      README 里写的「双击就能跑」根本不成立。模板本身就带 _说明，
+      播种出来的那份是能直接看懂的。
+    """
+    path = ROOT / "data" / "config.json"
+    if not path.exists():
+        example = ROOT / "data" / "config.example.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if example.exists():
+            shutil.copyfile(example, path)
+        else:                      # 连模板都没有：给一份最小可跑的
+            path.write_text(json.dumps({
+                "paths": {
+                    "journal": "memory/journal.jsonl", "state": "memory/state.json",
+                    "profile": "persona/PROFILE.md", "summaries": "memory/summaries",
+                    "archive": "memory/archive", "view": "view/memory.html",
+                },
+                "tools": {"fs_root": "", "search_backend": "ddgs", "proxy": "auto"},
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 

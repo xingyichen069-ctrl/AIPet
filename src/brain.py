@@ -11,6 +11,26 @@ brain.py —— 独立大脑（插槽 B）
     temperature    ⚠️ 见下面的坑
 
 ═══════════════════════════════════════════════════════════════
+  接哪家都行
+═══════════════════════════════════════════════════════════════
+
+只要对方是 **OpenAI 兼容的 `/chat/completions`**，就能当脑子用。
+默认连 DeepSeek，换别家只要改 endpoint 和模型名：
+
+    data/secrets.json
+    {
+      "deepseek_api_key":  "你的 key",
+      "deepseek_base_url": "https://你的服务/v1"    ← 不填就走 DeepSeek 官方
+    }
+
+（键名里的 "deepseek" 是历史包袱，改掉会让老配置读不出来，所以留着。）
+模型名在 data/thinking.json 的档位里改。
+
+⚠️ 下面这两条**是 DeepSeek 特有的**，换成别家就不一定成立 ——
+   比如别的服务商可能认 `temperature`，思考强度也可能真有好几档。
+   它们不是这个程序的限制，是那家 API 的行为。
+
+═══════════════════════════════════════════════════════════════
   两个 DeepSeek 的坑（官方文档明确写了，不是我的推测）
 ═══════════════════════════════════════════════════════════════
 
@@ -66,6 +86,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -263,13 +284,14 @@ def _explain(e: Exception) -> str:
             msg = e.reason or ""
         hints = {
             401: "API key 无效或已失效。检查 data/secrets.json。",
-            402: "余额不足。去 platform.deepseek.com 充值。",
+            402: "余额不足。去你用的那家服务商充值。",
             429: "触发限流。等一会儿，或降低调用频率。",
             400: f"请求被拒：{msg}",
         }
         return hints.get(e.code, f"HTTP {e.code}：{msg}")
     if isinstance(e, urllib.error.URLError):
-        return f"网络不通：{e.reason}。国内直连 api.deepseek.com 通常没问题，检查防火墙。"
+        host = urllib.parse.urlparse(base_url()).netloc or base_url()
+        return f"网络不通：{e.reason}。连不上 {host}，检查网络、代理和防火墙。"
     return f"{type(e).__name__}: {e}"
 
 

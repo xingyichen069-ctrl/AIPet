@@ -47,7 +47,10 @@ ROLES = {
     # 夜间是「湖面结冰的深夜」：整片深蓝，主色提亮成发光的冰。
     # button_text 夜间用深色（#08202e）—— 按钮本身是亮冰蓝，上面压白字看不清。
     'cirno': (
-        ('#203a4c', '#5f7d90', '#b9d9e9', '#ddf0fa', '#2b6f97', '#3f9fcf', '#f6fcff', '#3f9fcf', '#ffffff', '#f9fdff', '#e3f3fb'),
+        #                       button ↓ 原本是 #3f9fcf（和 blue 同色）。那个太浅，
+        #   白字压上去只有 2.97:1，是四套主题里唯一过不了 4.5:1 的。
+        #   换成同一套里的深蓝，白字 5.5:1。
+        ('#203a4c', '#5f7d90', '#b9d9e9', '#ddf0fa', '#2b6f97', '#3f9fcf', '#f6fcff', '#2b6f97', '#ffffff', '#f9fdff', '#e3f3fb'),
         ('#dcebf6', '#8ea9bd', '#2f4b60', '#365a71', '#c3e9fb', '#7ecfee', '#0f1c2b', '#7ecfee', '#08202e', '#111f2f', '#1b3549')),
 }
 ROLE_KEYS = ('text', 'muted', 'border', 'hover', 'selected', 'blue', 'surface', 'button', 'button_text', 'bubble', 'user')

@@ -184,7 +184,7 @@ def mood(action: str = "get", key: str = "", hours: float = 0,
         if a == "log":
             # ★ 每轮记一笔要走这儿，别拿 fs_write 自己拼 JSON。
             #   实测踩过：SOUL.md 里那句"追加进 data/mood_log.jsonl"
-            #   没有配套工具，她就自己拼了一段写进 D:\CXY\data\ ——
+            #   没有配套工具，她就自己拼了一段写进沙箱里的 data\ ——
             #   沙箱路径和 mood.py 真正用的 AIPet\data\ 不是一个地方，
             #   字段名也对不上（time/mood vs ts/key），等于白记。
             row = MD.write_log(why or "", source="她自己")
@@ -206,9 +206,12 @@ def mood(action: str = "get", key: str = "", hours: float = 0,
 #  文件读写（沙箱）
 # ═══════════════════════════════════════════════════════════════
 
-# 模型只能在这个目录里动手。用户要的是「在 QQ 上指挥她往 D:\CXY 存东西」，
-# 所以根定在这儿。想改去 data/config.json 的 tools.fs_root。
-FS_ROOT = Path(r"D:\CXY")
+# 沙箱根 —— 她能读写的那一个目录。想换成别处（或者换回自己的目录），
+# 在 data/config.json 里设 tools.fs_root，写绝对路径。
+#
+# 默认值放在用户主目录下，不写死任何盘符：写死的话那是作者本机的目录结构，
+# 对别人没意义，还会被提交进公开仓库。
+DEFAULT_FS_ROOT = Path.home() / "AIPet"
 
 # 单次读写的上限。不设的话，读一个 100MB 的日志会直接把 prompt 撑爆 ——
 # 而且模型看不出"这是因为太大"，只会开始胡编。
@@ -226,9 +229,9 @@ def _fs_root() -> Path:
     except (OSError, json.JSONDecodeError, ValueError):
         pass
     try:
-        return FS_ROOT.resolve()
+        return DEFAULT_FS_ROOT.expanduser().resolve()
     except OSError:
-        return FS_ROOT
+        return DEFAULT_FS_ROOT
 
 
 def _sandbox(rel: str) -> tuple[Path | None, str]:
@@ -236,8 +239,8 @@ def _sandbox(rel: str) -> tuple[Path | None, str]:
     把模型给的路径收进沙箱。收不进去就返回 (None, 原因)。
 
     ★ 三道闸，缺一不可：
-      1. 他很可能照着用户的话写成 "D:\\CXY\\讲" 或 "CXY/讲" —— 先剥掉这层
-         前缀当相对路径，而不是直接拒。拒了他会换个写法接着试，很吵。
+      1. 他很可能照着用户的话写成 "<沙箱根的名字>\\讲" —— 先剥掉这层前缀
+         当相对路径，而不是直接拒。拒了他会换个写法接着试，很吵。
       2. resolve() 之后必须仍在沙箱里 —— 这一步同时挡住 ".." 和符号链接。
       3. 空字符串 = 沙箱根。
     """
@@ -249,7 +252,7 @@ def _sandbox(rel: str) -> tuple[Path | None, str]:
 
     # ★ 带盘符的绝对路径：只收落在沙箱里的，不在就明确拒。
     #   别把它剥成相对路径 —— 那样"存到 D:\其他目录"会悄悄变成
-    #   "存到 D:\CXY\其他目录"，用户按他说的路径去找，什么都找不到。
+    #   "存到沙箱里"，用户按他说的路径去找，什么都找不到。
     if re.match(r"^[A-Za-z]:", s):
         try:
             p = Path(raw).resolve()
@@ -259,12 +262,13 @@ def _sandbox(rel: str) -> tuple[Path | None, str]:
             return None, f"越界了。我只能动 {root} 里面的东西，碰不到 {rel}。"
         return p, ""
 
-    # 无盘符：当成沙箱内的相对路径。"CXY/xxx" 这种照抄用户话的写法剥掉前缀。
+    # 无盘符：当成沙箱内的相对路径。
+    # 模型很可能照抄用户的话，写成 "<沙箱根的名字>/xxx" —— 把那层前缀剥掉。
+    # 前缀跟着沙箱根走，不写死某个目录名：换个根它自己就跟着换。
     s = s.lstrip("/")
-    for pre in ("CXY/", "cxy/"):
-        if s.startswith(pre):
-            s = s[len(pre):]
-            break
+    pre = root.name + "/"
+    if pre != "/" and s.lower().startswith(pre.lower()):
+        s = s[len(pre):]
 
     try:
         target = (root / s).resolve()
@@ -416,7 +420,7 @@ def see_image(path: str, question: str = "") -> str:
     DeepSeek 是纯文本的，图进去她只能干看着。
 
     ★ **不设沙箱**：图可以在这台电脑的任何一个地方。理由是从对话窗拖进来的
-      文件本来就在各处（桌面、下载、截图文件夹），限制在 D:\\CXY 里等于
+      文件本来就在各处（桌面、下载、截图文件夹），限制在沙箱里等于
       让拖图残废一半。
 
       两道闸门替它把关：
@@ -561,7 +565,7 @@ SPECS = [
             "name": "fs_list",
             "description":
                 f"列出本地沙箱目录里的内容。用户让你看看某个文件夹有什么、"
-                f"或者你不确定东西放哪了时用。只能看 {FS_ROOT} 里面的。",
+                f"或者你不确定东西放哪了时用。只能看 {_fs_root()} 里面的。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -577,7 +581,7 @@ SPECS = [
             "name": "fs_read",
             "description":
                 f"读本地的一个文本文件。用户让你看看文件里写了什么时用。"
-                f"只能读 {FS_ROOT} 里面的。图片、压缩包这类读不出文字内容，别拿它试。",
+                f"只能读 {_fs_root()} 里面的。图片、压缩包这类读不出文字内容，别拿它试。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -593,7 +597,7 @@ SPECS = [
             "name": "fs_write",
             "description":
                 f"把文字写进本地的文本文件。用户让你记录、整理、保存内容时用。"
-                f"父目录不存在会自动建。只能写 {FS_ROOT} 里面的。",
+                f"父目录不存在会自动建。只能写 {_fs_root()} 里面的。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -611,7 +615,7 @@ SPECS = [
         "type": "function",
         "function": {
             "name": "fs_mkdir",
-            "description": f"在沙箱里建一个目录。只能建在 {FS_ROOT} 里面。",
+            "description": f"在沙箱里建一个目录。只能建在 {_fs_root()} 里面。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -653,8 +657,7 @@ SPECS = [
                 "看一张图。你自己是纯文本的，图里有什么必须调它才知道——"
                 "不要靠猜，也不要根据文件名编内容。"
                 "用户让你看某个截图/照片时用。"
-                "路径可以在这台电脑的任何地方（桌面、下载、截图文件夹都行），"
-                "不用非在 D:\\CXY 里。"
+                "路径可以在这台电脑的任何地方（桌面、下载、截图文件夹都行）。"
                 "★ 但只能看图片：别拿它去读 .json / .md / .txt 这类文件，"
                 "那不是它的用途，读了也只会被拒。",
             "parameters": {

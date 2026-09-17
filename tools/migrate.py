@@ -319,7 +319,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description="把旧装里的私人内容搬到新装（人格、记忆、密钥、信道、配置）",
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("source", nargs="?", help="旧目录，比如 D:\\CXY\\AIPet-old")
+    ap.add_argument("source", nargs="?", help="旧目录的路径，比如 D:\\AIPet-old")
     ap.add_argument("--into", default=None, help="新目录，默认是这份脚本所在的安装")
     ap.add_argument("--dry-run", action="store_true", help="只列清单，不搬")
     ap.add_argument("--yes", action="store_true", help="不问，直接搬")
