@@ -374,9 +374,25 @@ class QQEvent:
 
     @property
     def images(self) -> list[dict]:
-        """附件里的图片。别的类型（文件/视频）先不管。"""
+        """附件里的图片。"""
         return [a for a in self.attachments
                 if str(a.get("content_type", "")).startswith("image/")]
+
+    @property
+    def documents(self) -> list[dict]:
+        """
+        附件里的 Word 文档。
+
+        ★ 靠**文件名后缀**认，不靠 content_type：QQ 对文件的类型标注
+          没实测过，但 filename 是它自己给的、也一定在。认错了顶多
+          是没读成，不会误伤别的。
+        """
+        out = []
+        for a in self.attachments:
+            name = str(a.get("filename") or "")
+            if Path(name).suffix.lower() in (".docx", ".doc"):
+                out.append(a)
+        return out
 
     @property
     def speaker_id(self) -> str:

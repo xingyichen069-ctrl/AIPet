@@ -213,6 +213,11 @@ def mood(action: str = "get", key: str = "", hours: float = 0,
 # 对别人没意义，还会被提交进公开仓库。
 DEFAULT_FS_ROOT = Path.home() / "AIPet"
 
+# 走 docx_read 解析的扩展名。别的都是当纯文本读。
+# ★ .doc 也列在这儿：它解不出内容，但要是不列，就会被当纯文本读成
+#   一堆乱码 —— 那比明说"这是老格式，另存为 .docx"糟糕得多。
+DOCX_SUFFIX = {".docx", ".doc"}
+
 # 单次读写的上限。不设的话，读一个 100MB 的日志会直接把 prompt 撑爆 ——
 # 而且模型看不出"这是因为太大"，只会开始胡编。
 FS_READ_MAX = 200_000
@@ -310,7 +315,13 @@ def fs_list(path: str = "") -> str:
 
 
 def fs_read(path: str) -> str:
-    """读文本文件。"""
+    """
+    读文件。纯文本直接读，docx 走 docx_read（含里面的图）。
+
+    ★ docx 要在大小检查**之前**处理：压缩包本身可能只有几十 KB，
+      解出来的文字却能撑爆 prompt —— 卡文件大小没意义，卡的是解出来的东西。
+      docx_read 自己按 MAX_CHARS 截。
+    """
     target, err = _sandbox(path)
     if err:
         return err
@@ -318,6 +329,14 @@ def fs_read(path: str) -> str:
         return f"没有这个文件：{path}"
     if target.is_dir():
         return f"{path} 是目录，要看里面有什么该用 fs_list"
+
+    if target.suffix.lower() in DOCX_SUFFIX:
+        try:
+            import docx_read
+            return docx_read.as_prompt_block(target)
+        except Exception as e:                       # noqa: BLE001
+            return f"读 docx 失败：{type(e).__name__}: {e}"
+
     try:
         n = target.stat().st_size
         if n > FS_READ_MAX:
@@ -581,7 +600,10 @@ SPECS = [
             "name": "fs_read",
             "description":
                 f"读本地的一个文本文件。用户让你看看文件里写了什么时用。"
-                f"只能读 {_fs_root()} 里面的。图片、压缩包这类读不出文字内容，别拿它试。",
+                f"只能读 {_fs_root()} 里面的。"
+                f"纯文本、代码、Markdown 都能读；**.docx 也能读** —— "
+                f"正文和里面的图片都会转成文字。老的 .doc 读不了，要对方另存为 .docx。"
+                f"真正的图片（.png/.jpg）不要拿它试，那个用 see_image。",
             "parameters": {
                 "type": "object",
                 "properties": {

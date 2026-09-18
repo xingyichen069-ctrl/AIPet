@@ -135,6 +135,7 @@ AIPet/
 │   ├── thinking.py         思考强度引擎
 │   ├── local_tools.py      她能调用的工具（含沙箱）
 │   ├── vision.py           看图（接任意视觉接口）
+│   ├── docx_read.py        读 Word 文档（正文 + 里面的图）
 │   ├── mood.py             心理点
 │   ├── companion.py        对话接续、约定、安静陪伴
 │   ├── qq_bot.py           QQ 网关客户端

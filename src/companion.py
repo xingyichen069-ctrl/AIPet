@@ -35,8 +35,26 @@ def read_attachment(path):
             raise ValueError('这张图没读出内容。')
         return {'name': p.name, 'text': text, 'image': True}
 
+    # ★ docx 也走「先转成文字」这条路：正文和里面的图都由 docx_read 处理，
+    #   出来就是一段文本，下游（附件条、随消息发送）不用为它改任何东西。
+    #   上限不按文件大小卡 —— 压缩包可能只有几十 KB，解出来却能很长，
+    #   docx_read 自己按 MAX_CHARS 截。
+    #   .doc（老的二进制格式）也走这条路 —— 它解不出内容，但 docx_read
+    #   会回一句「另存为 .docx」，比一句泛泛的「格式不支持」有用得多。
+    if p.suffix.lower() in ('.docx', '.doc'):
+        if not p.is_file():
+            raise ValueError('文件不存在。')
+        import docx_read
+        r = docx_read.read(p)
+        if not r['ok']:
+            raise ValueError(r['error'] or '这份 docx 读不了。')
+        text = docx_read.as_prompt_block(p)
+        if not text.strip():
+            raise ValueError('这份 docx 里没读出内容。')
+        return {'name': p.name, 'text': text[:MAX_ATTACHMENT_CHARS], 'image': False}
+
     if p.suffix.lower() not in {'.txt', '.text', '.md', '.markdown'}:
-        raise ValueError('支持 TXT / Markdown 文本，以及 PNG / JPG / WEBP / GIF / BMP 图片。')
+        raise ValueError('支持 TXT / Markdown / DOCX，以及 PNG / JPG / WEBP / GIF / BMP 图片。')
     if not p.is_file() or p.stat().st_size > MAX_ATTACHMENT_BYTES:
         raise ValueError('文件不存在或超过 128 KB，请选一段较短的材料。')
     raw = p.read_bytes()

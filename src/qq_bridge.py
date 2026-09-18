@@ -407,6 +407,47 @@ def read_images(ev: QB.QQEvent) -> str:
     return "\n\n".join(parts)
 
 
+def read_documents(ev: QB.QQEvent) -> str:
+    """
+    把这条消息里的 Word 文档读成文字。没有、或全失败，返回空串。
+
+    和读图一样：URL 带 rkey 签名会过期，所以是收到就下载、不缓存。
+
+    .docx 里的**图片也会被读出来**（走同一个视觉接口）—— 正文和图片里
+    的文字一起交给她。老的 .doc 解不了，会回一句让人另存为。
+
+    下载的文件落在中转目录里，交给 _sweep_media 按同一套规则清理。
+    """
+    docs = ev.documents
+    if not docs:
+        return ""
+
+    _sweep_media()
+    parts: list[str] = []
+    for i, a in enumerate(docs[:MEDIA_MAX_PER_MSG], 1):
+        url = str(a.get("url") or "")
+        raw_name = str(a.get("filename") or f"doc{i}.docx")
+        safe = re.sub(r"[^\w.\-]", "_", Path(raw_name).name)[:60] or f"doc{i}.docx"
+        if not url:
+            parts.append(f"【文档 {safe} 没取到：消息里没有下载地址】")
+            continue
+
+        dest = MEDIA_DIR / f"{ev.msg_id[:12]}_{safe}"
+        if not _download(url, dest):
+            parts.append(f"【文档 {safe} 没取到】")
+            continue
+
+        try:
+            import docx_read
+            text = docx_read.as_prompt_block(dest)
+        except Exception as e:                       # noqa: BLE001
+            text = f"读不了这个文档：{type(e).__name__}: {e}"
+        log(f"读了文档（{safe}）：{text[:80]}")
+        parts.append(f"【文档 {safe}】\n{text}")
+
+    return "\n\n".join(parts)
+
+
 # ═══════════════════════════════════════════════════════════════
 #  认领
 # ═══════════════════════════════════════════════════════════════
@@ -590,7 +631,8 @@ class Bridge:
         #   "对方发了张图，图里是 xxx"，而不是一个空格 —— 否则过一会儿
         #   再提起这张图，她完全不记得有这回事。
         if ev.attachments:
-            imported = read_images(ev)
+            imported = "\n\n".join(
+                x for x in (read_images(ev), read_documents(ev)) if x)
             if imported:
                 ev.content = ((ev.content or "").strip() + "\n\n" + imported).strip()
 
