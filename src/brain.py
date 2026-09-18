@@ -102,9 +102,22 @@ except ImportError:
 
 # ★ 原来定的是 5。实测撞过：让她看一张图，她先猜错目录、列一次目录
 #   找到文件、再读图，三步就到顶了 —— 结果话都没说出来就断了。
-#   提到 8：够「找文件 → 读图 → 记一笔」这类多步操作，又不至于打转太久。
+#   提到 8，又在 09-18 撞了一次（"那张图在 data/qq_media 里，重新识别一下"）：
+#   列目录 → 读图 → 发现不对 → 再找 → 再读…… 8 轮照样用完。
+#   现在 10，而且到顶不再空手而归（见下面 force_final）。
 #   QQ 那边的真正闸门是 REPLY_BUDGET_S（240 秒），不是这个数。
-MAX_TOOL_ROUNDS = 8         # 防止工具调用打转
+MAX_TOOL_ROUNDS = 10        # 防止工具调用打转
+
+# ★ 工具轮次用尽时用的收尾提示。
+#   原来的做法是 yield 一句 error 然后 return —— 等于白跑十轮工具，
+#   一个字不回，用户看到的就是"这条消息她没理我"。
+#   现在改成：最后再问一次，**不给工具**，逼她用手上已有的东西作答。
+FORCE_FINAL_HINT = (
+    "（系统提示）工具调用已达上限，接下来不再提供任何工具。"
+    "请直接用你已经拿到的信息回答用户。"
+    "信息不够就照实说：你试了什么、卡在哪、还缺什么。"
+    "**必须说出一句话，不能空着。**"
+)
 
 
 if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("-", "") != "utf8":
@@ -334,11 +347,18 @@ def stream(query: str, history: list[dict] | None = None,
     messages = list(payload["messages"])
     text_total: list[str] = []
     tool_rounds = 0
+    force_final = False
 
     while True:
         if cancelled and cancelled():
             return
         body = {**payload, "messages": messages}
+        if force_final:
+            # ★ 收尾那一轮：把工具摘掉，她就只能说话。
+            #   摘掉而不是"劝她别用" —— 只要 tools 还在，模型就会继续调。
+            body.pop("tools", None)
+            body.pop("tool_choice", None)
+            body["messages"] = messages + [{"role": "user", "content": FORCE_FINAL_HINT}]
         content_buf: list[str] = []
         reasoning_buf: list[str] = []
         calls: dict[int, dict] = {}          # index → {id, name, args}
@@ -401,8 +421,14 @@ def stream(query: str, history: list[dict] | None = None,
 
         tool_rounds += 1
         if tool_rounds > MAX_TOOL_ROUNDS:
-            yield ("error", f"工具调用超过 {MAX_TOOL_ROUNDS} 轮，停止")
-            return
+            # ★ 不再空手返回。这一轮的工具照样执行（结果进 messages），
+            #   但下一轮不给工具了，逼她用已有的信息说一句话。
+            if force_final:
+                # 理论上到不了这儿：force_final 那轮没有 tools，不会再有 calls。
+                yield ("error", f"工具调用超过 {MAX_TOOL_ROUNDS} 轮，停止")
+                return
+            yield ("tool", f"⚠ 工具轮次用尽（{MAX_TOOL_ROUNDS} 轮），让她用手上的信息作答")
+            force_final = True
 
         # 回传 assistant 消息。**必须带 reasoning_content**——
         # 官方明确：带 tools 的请求，后续所有请求都要完整回传，

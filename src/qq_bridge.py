@@ -97,6 +97,10 @@ REPLY_CHARS_HINT = 300
 # 群里最多记多长的临时笔记
 NOTE_MAX_CHARS = 120
 
+# 同一个会话最多排几条。她一次能想 4~90 秒，这期间同群来的消息会排进队列；
+# 排到这个数还轮不上，说明前一条卡死了，那就丢最早的保最新的。
+MAX_PENDING = 5
+
 # ── 对话历史 ────────────────────────────────────────────────
 # ★ 没有这个她会"接不上话"。
 #   实测：群里刚数完"一、二、三…"，下一条"再来再来"，
@@ -583,6 +587,7 @@ class Bridge:
     def __init__(self, reply_enabled: bool = True):
         self.reply_enabled = reply_enabled
         self._busy: set[str] = set()
+        self._pending: dict[str, list] = {}     # 会话 key → 排队等着的消息
         self._lock = threading.Lock()
 
     def handle(self, ev: QB.QQEvent) -> None:
@@ -592,30 +597,66 @@ class Bridge:
         # ★ 只看正文会把图片消息整条丢掉。实测：群里发图的推送是
         #   content=" "（一个空格）+ attachments=[{url, content_type, ...}]。
         #   所以判断「有没有内容」必须把附件也算上。
+        #
+        #   ★ 但这里原来是**静默 return** —— 日志里只留一行"收到"，
+        #     后面什么都没有，排查时根本看不出是被这条挡的。记一笔。
         if not (ev.content or "").strip() and not ev.attachments:
+            log("空内容事件（没有正文也没有附件），跳过")
             return
         t = threading.Thread(target=self._run, args=(ev,), daemon=True)
         t.start()
 
     # ── 真正干活 ──
     def _run(self, ev: QB.QQEvent) -> None:
-        t0 = time.time()
-        # 同一个会话串行，免得两条消息同时改记忆
+        """
+        同一个会话串行，免得两条消息同时改记忆。
+
+        ★ 原来是"正忙就丢掉"（`log("上一条还在处理，这条跳过")` + return）。
+          问题在于她一次能想 4~90 秒，这个窗口里同群发的消息**全都没了**，
+          而且用户那边看不出任何异常 —— 只是"她没理我"。
+
+          现在改成排队：忙的时候把消息压进 _pending，处理完一条自动取下一条。
+          原来是怕并发改记忆才串行的，但 memory.py 早就有写锁了，
+          真正需要的只是"顺序"，不是"丢弃"。
+
+        ★ t0 每条都要重算：REPLY_BUDGET_S 是从 t0 起算的，
+          排队排了半分钟再用同一条的 t0，会直接判超时。
+        """
         key = f"{ev.scene}:{ev.group_openid or ev.user_openid}"
         with self._lock:
             if key in self._busy:
-                log("上一条还在处理，这条跳过")
+                q = self._pending.setdefault(key, [])
+                if len(q) >= MAX_PENDING:
+                    # 积压太多说明前一条卡住了。丢最老的，保最新的 ——
+                    # 最新的那句才是用户现在在等的。
+                    q.pop(0)
+                    log(f"队列积压超过 {MAX_PENDING} 条，丢掉最早的一条")
+                q.append(ev)
+                log(f"上一条还在处理，这条排队（队列 {len(q)} 条）")
                 return
             self._busy.add(key)
+
         try:
-            self._process(ev, t0)
-        except Exception as e:
-            import traceback
-            log(f"处理出错：{type(e).__name__}: {e}")
-            log(traceback.format_exc()[-800:])
-        finally:
+            cur = ev
+            while cur is not None:
+                try:
+                    self._process(cur, time.time())
+                except Exception as e:
+                    import traceback
+                    log(f"处理出错：{type(e).__name__}: {e}")
+                    log(traceback.format_exc()[-800:])
+                with self._lock:
+                    q = self._pending.get(key) or []
+                    cur = q.pop(0) if q else None
+                    if cur is None:
+                        self._pending.pop(key, None)
+                        self._busy.discard(key)
+        except BaseException:
+            # 不管怎么出去的，闸门必须放开 —— 否则这个会话永远卡在"忙"。
             with self._lock:
+                self._pending.pop(key, None)
                 self._busy.discard(key)
+            raise
 
     def _process(self, ev: QB.QQEvent, t0: float) -> None:
         who = identify(ev)
