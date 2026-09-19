@@ -92,9 +92,17 @@ ITEMS: list[tuple[str, str, str]] = [
 # 目标里出现这些，说明它不是一份干净的新装，得 --force 才动
 FOOTPRINT = ("persona/SOUL.md", "memory/journal.jsonl", "data/secrets.json")
 
+# 可以整个拷过去的运行环境。默认不搬，加 --with-runtime 才搬。
+#
+# ★ runtime/ 是嵌入版 Python，路径全是相对写法，**换目录照样能用** ——
+#   同机换装直接拷比重新下 300 MB 划算得多。
+# ★ .venv/ 不一样：venv 里写死了绝对路径（pyvenv.cfg、Scripts 里的
+#   shebang、*.pth），拷到新目录经常就废了。还是会拷，但多给一句警告。
+RUNTIME_DIRS = ("runtime", ".venv")
+
 # (路径, 为什么不搬)
 SKIP: list[tuple[str, str]] = [
-    ("runtime/  .venv/",                 "运行环境。新装里跑一次 准备环境.bat 就有"),
+    ("runtime/  .venv/",                 "运行环境。加 --with-runtime 一起拷（同机换装最快），否则新装里跑一次 准备环境.bat"),
     ("data/cache/",                      "搜索缓存、启动日志、预览图，会自己重建"),
     ("data/qq.log  qq.pid  qq_status.json", "运行时状态。搬过去会让桌宠以为 QQ 还连着"),
     ("view/",                            "记忆面板，程序生成"),
@@ -159,6 +167,34 @@ def footprint(target: Path) -> list[str]:
 
 def stamp() -> str:
     return datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def runtime_plan(source: Path, target: Path) -> list[dict]:
+    """运行环境那边要拷什么。只算目录，不逐个列文件。"""
+    out = []
+    for name in RUNTIME_DIRS:
+        src = source / name
+        if not src.is_dir():
+            continue
+        files = sum(1 for p in src.rglob("*") if p.is_file())
+        size = sum(p.stat().st_size for p in src.rglob("*") if p.is_file())
+        out.append({"name": name, "src": src, "dst": target / name,
+                    "files": files, "size": size,
+                    "exists": (target / name).exists()})
+    return out
+
+
+def copy_runtime(rows: list[dict]) -> int:
+    """
+    整个目录拷过去。
+
+    ★ 用 copytree 一次拷一棵树，不是逐个文件 copy2 —— 嵌入版 Python 有
+      九千多个小文件，逐个来光是系统调用就够等半分钟。
+    symlinks=True 是给 .venv 里那些指向 python.exe 的链接留的。
+    """
+    for r in rows:
+        shutil.copytree(r["src"], r["dst"], dirs_exist_ok=True, symlinks=True)
+    return len(rows)
 
 
 def apply(rows, target: Path) -> tuple[int, int, Path | None]:
@@ -263,6 +299,22 @@ def selftest() -> int:
         # 再跑一次：这次目标已经有私人内容了
         check_("目标再次迁移时会被认出「不干净」", footprint(new) != [])
 
+        # ── 运行环境（要 --with-runtime 才搬）──
+        (old / "runtime").mkdir()
+        (old / "runtime" / "python.exe").write_bytes(b"MZ")
+        rt = runtime_plan(old, new)
+        check_("认出运行环境", [r["name"] for r in rt] == ["runtime"],
+              ", ".join(r["name"] for r in rt) or "（一个都没认出来）")
+        check_("★ 运行环境不进私人文件清单",
+              not any("runtime" in str(r["rel"]) for r in rows))
+        if rt:
+            check_("运行环境的文件数和体积算对了",
+                  rt[0]["files"] == 1 and rt[0]["size"] == 2,
+                  f"{rt[0]['files']} 个 / {rt[0]['size']} 字节")
+            copy_runtime(rt)
+            check_("运行环境真拷过去了", (new / "runtime" / "python.exe").exists())
+        check_("没有运行环境的目录不会冒出这一项", runtime_plan(new / "src", new) == [])
+
     print()
     print("全部通过" if not fails else f"{fails} 项未通过")
     return fails
@@ -356,6 +408,8 @@ def main() -> None:
     ap.add_argument("--yes", action="store_true", help="不问，直接搬")
     ap.add_argument("--force", action="store_true", help="目标已经有私人内容时也照搬")
     ap.add_argument("--no-backups", action="store_true", help="不搬 backups/ 里的历史备份包")
+    ap.add_argument("--with-runtime", action="store_true",
+                    help="连运行环境（runtime/ .venv/）一起拷。同机换装用，省一次 300 MB 下载")
     args = ap.parse_args()
 
     if args.source == "selftest":
@@ -445,6 +499,19 @@ def main() -> None:
     if missing:
         print(f"\n  旧目录里没有（跳过）：{'、'.join(missing)}")
 
+    rt = runtime_plan(source, target) if args.with_runtime else []
+    if rt:
+        print()
+        for r in rt:
+            over = "，会覆盖目标里已有的" if r["exists"] else ""
+            print(f"  运行环境  {r['name']}/"
+                  f"  {r['files']} 个文件  {r['size'] / 1048576:.0f} MB{over}")
+        if any(r["name"] == ".venv" for r in rt):
+            print("              ★ .venv 里写死了绝对路径，拷过去多半用不了 —— "
+                  "真起不来就跑一次 准备环境.bat")
+        total += sum(r["size"] for r in rt) / 1024
+        print(f"\n  连运行环境一起合计 {total / 1024:.1f} MB")
+
     print("\n  不搬：")
     for path, why_not in SKIP:
         print(f"    {path:<38} {why_not}")
@@ -479,8 +546,17 @@ def main() -> None:
     print(f"\n  搬了 {copied} 个，覆盖 {over} 个。")
     if backup_dir:
         print(f"  覆盖前的那份存在：{backup_dir}")
+
+    if rt:
+        for r in rt:
+            print(f"  正在拷 {r['name']}/（{r['files']} 个文件，"
+                  f"{r['size'] / 1048576:.0f} MB）…")
+        copy_runtime(rt)
+        print("  运行环境拷完了。")
+
     print("\n  接下来：")
-    print("    1. 在新目录跑一次 准备环境.bat（运行环境不搬）")
+    print("    1. 直接启动桌宠试试" if rt else
+          "    1. 在新目录跑一次 准备环境.bat（运行环境没搬）")
     print("    2. 确认 data\\secrets.json 在，再启动桌宠")
     print("    3. 旧目录先别删，跑顺了再删\n")
 

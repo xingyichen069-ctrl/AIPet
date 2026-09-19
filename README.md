@@ -122,7 +122,7 @@ python tools/migrate.py <旧目录> --dry-run   # 先看清单，不动
 python tools/migrate.py <旧目录>             # 看清单并确认
 ```
 
-或者把旧目录拖到 `迁移私人内容.bat` 上。
+或者把旧目录拖到 `迁移私人内容.bat` 上。本机换目录（只是换个盘、不重装）加 `--with-runtime`，连 `runtime/` 一起搬，省一次 300 MB 下载。
 
 ## 目录结构
 
