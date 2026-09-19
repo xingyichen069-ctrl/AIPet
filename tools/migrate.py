@@ -297,6 +297,37 @@ def _lnk_points_to(link: Path, needle: str) -> bool:
     return False
 
 
+def guess_source(target: Path) -> list[Path]:
+    """
+    在目标旁边找找有没有像个 AIPet 旧装的目录。
+
+    ★ 为什么要有这个：双击 `迁移私人内容.bat` 是不带参数的，原来只会打一段
+      用法说明然后退出 —— 用户的感受就是"点了没反应"。而这个脚本的用法
+      （把旧目录拖到 bat 上）本来就不直观。
+
+      现在双击会自己找：扫目标所在目录和它上一层，挑出有 src/pet.py 的。
+      找到唯一一个就直接用，找到多个就列出来让人挑。
+    """
+    seen: dict[Path, Path] = {}
+    for base in (target.parent, target.parent.parent):
+        try:
+            entries = list(base.iterdir())
+        except OSError:
+            continue
+        for p in entries:
+            try:
+                if not p.is_dir() or p.resolve() == target.resolve():
+                    continue
+            except OSError:
+                continue
+            if not (p / "src" / "pet.py").exists():
+                continue
+            seen[p.resolve()] = p
+    # 有私人内容的排前面 —— 空壳（刚解压的新版）不该被当成"旧装"
+    return sorted(seen.values(),
+                  key=lambda p: (not (p / "persona").exists(), p.name))
+
+
 def _startup_hint(old: Path) -> list[str]:
     """
     开机自启里有没有还指着旧目录的快捷方式。
@@ -331,11 +362,32 @@ def main() -> None:
         sys.exit(selftest())
 
     if not args.source:
-        ap.print_help()
-        print("""
-  没给旧目录。怎么用：
+        # 双击进来的：先自己找一遍旧装，找不到再打用法
+        here = Path(__file__).resolve().parent.parent
+        found = guess_source(here)
+        # 只有唯一一个"有私人内容"的，才敢直接用 —— 空壳（git 克隆、
+        # 刚解压的新版）没有可搬的东西，不该跟真装一起让人挑。
+        real = [p for p in found if (p / "persona").exists()]
+        if len(real) == 1:
+            print(f"\n  没给旧目录，自动找到：{real[0]}")
+            print("  （不对的话 Ctrl+C 退出，用命令行自己指定）\n")
+            args.source = str(real[0])
+        elif len(found) == 1:
+            print(f"\n  没给旧目录，旁边只有：{found[0]}\n")
+            args.source = str(found[0])
+        elif found:
+            print("\n  没给旧目录。旁边这几个看着都像 AIPet 装，你要从哪个搬？\n")
+            for p in found[:8]:
+                mark = "有私人内容" if (p / "persona").exists() else "空的（刚解压？）"
+                print(f"    {p}    {mark}")
+            print("\n  用法：python tools\\migrate.py <旧目录> [--dry-run]")
+            sys.exit(2)
+        else:
+            ap.print_help()
+            print("""
+  没给旧目录，旁边也没找到别的 AIPet 装。怎么用：
 
-    双击 迁移私人内容.bat    —— 把【旧版目录】拖到那个文件上就行
+    把【旧版目录】拖到 迁移私人内容.bat 上
     或者命令行：python tools\\migrate.py D:\\旧版\\AIPet
 
   先只看清单不搬，加 --dry-run。
@@ -345,7 +397,7 @@ def main() -> None:
     persona/ memory/ data/（都在 .gitignore 里），解压也不会
     删掉压缩包里没有的文件。
     需要它的是另一种换法：解压到新目录，然后把旧的整个丢掉。""")
-        sys.exit(2)
+            sys.exit(2)
 
     source = Path(args.source).expanduser().resolve()
     target = Path(args.into).expanduser().resolve() if args.into \
