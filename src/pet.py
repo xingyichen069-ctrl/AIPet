@@ -1218,7 +1218,9 @@ class PetWindow(QWidget):
                 return False
         try:
             local = self.gl.mapFrom(self, pos.toPoint())
-            return self.gl._model_hit_at(local.x(), local.y())
+            # 对话框和思考面板都只由身体区域触发；头部点击仍交给
+            # Live2D 自己的反馈逻辑，不会在双击时绕过这个限制开对话。
+            return self.gl.hit_local(local.x(), local.y()) == "Body"
         except (AttributeError, RuntimeError, TypeError, ValueError):
             return False
 
