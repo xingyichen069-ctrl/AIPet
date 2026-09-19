@@ -254,6 +254,10 @@ def selftest() -> int:
         (old / "src" / "pet.py").write_text("# fake", encoding="utf-8")
         (old / "persona").mkdir()
         (old / "persona" / "SOUL.md").write_text("我是旧人格", encoding="utf-8")
+        (old / "persona" / "active.json").write_text('{"id":"hiyori"}\n', encoding="utf-8")
+        (old / "persona" / "characters" / "hiyori").mkdir(parents=True)
+        (old / "persona" / "characters" / "hiyori" / "SOUL.md").write_text("# 日和\n", encoding="utf-8")
+        (old / "persona" / "characters" / "hiyori" / "avatar.png").write_bytes(b"PNG")
         (old / "memory").mkdir()
         (old / "memory" / "journal.jsonl").write_text('{"id":"1"}\n', encoding="utf-8")
         (old / "data").mkdir()
@@ -287,6 +291,8 @@ def selftest() -> int:
         rels = {str(r["rel"]) for r in rows}
 
         check_("人格会搬", "persona\\SOUL.md" in rels or "persona/SOUL.md" in rels)
+        check_("★ 当前人格选择会搬", any(r.endswith("persona/active.json") or r.endswith("persona\\active.json") for r in rels))
+        check_("★ 人格库和头像会搬", any("characters" in r and r.endswith("avatar.png") for r in rels))
         check_("记忆会搬", any("journal" in r for r in rels))
         check_("★ 密钥会搬", any("secrets.json" in r for r in rels))
         check_("信道绑定会搬", any("qq.json" in r for r in rels))
@@ -298,6 +304,9 @@ def selftest() -> int:
         check_("真搬完了", copied == len(rows), f"{copied} 个")
         check_("人格到位",
               (new / "persona" / "SOUL.md").read_text(encoding="utf-8") == "我是旧人格")
+        check_("★ 人格库到位",
+              (new / "persona" / "active.json").exists()
+              and (new / "persona" / "characters" / "hiyori" / "avatar.png").read_bytes() == b"PNG")
         check_("密钥到位",
               "sk-OLD" in (new / "data" / "secrets.json").read_text(encoding="utf-8"))
         check_("★ 新装的 thinking.json 被旧的覆盖（那是你的调参）",
