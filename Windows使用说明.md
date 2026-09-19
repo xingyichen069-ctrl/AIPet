@@ -10,6 +10,8 @@
 
 正常启动不会常驻命令窗口。聊天和联网查询仍需网络及原来的模型服务配置。
 
+如果你使用的是仓库内的目录版 EXE，运行 `python tools/package_windows.py --force` 后双击 `dist\AIPet\AIPet.exe`。它不需要项目外的 Python；首次启动仍要在生成的 `data\secrets.json` 或环境变量中配置模型密钥。
+
 需要桌面入口时，右键“启动桌宠.bat”，选择“发送到 → 桌面快捷方式”。
 
 ## 迁移了什么

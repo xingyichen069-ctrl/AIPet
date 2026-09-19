@@ -59,12 +59,18 @@ class Desktop(unittest.TestCase):
         self.pet.panel = Mock()
         self.pet.bubble_win = None
         self.pet.chat = None
+        self.pet._check_update = Mock()
         self.pet.companion = UI.CompanionController(self.pet)
         self.chat = UI.ChatWindow(self.pet, FakeWorker)
         self.pet.chat = self.chat
         self.chat.show()
         FakeWorker.mode = 'success'
         FakeWorker.queries = []
+
+    def test_update_button_delegates_to_desktop_controller(self):
+        self.assertEqual(self.chat.update_btn.text(), '检查更新')
+        self.chat.update_btn.click()
+        self.pet._check_update.assert_called_once_with()
 
     def tearDown(self):
         if self.chat.busy():

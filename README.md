@@ -118,7 +118,7 @@ python src/brain.py chat              # 命令行对话
 
 当前版本号在根目录 `VERSION` —— 程序读的是它，`CHANGELOG.md` 和这份 README 里的只是给人看的。
 
-查有没有新版本：桌宠右键 → 高级 → 检查更新；或者在 QQ 上给主人发 `/版本`。桌宠发现新版后可以直接点“下载并安装”，更新器会先备份将覆盖的公开代码文件。
+查有没有新版本：本地聊天窗口标题栏的“检查更新”、桌宠右键 → 高级 → 检查更新；或者在 QQ 上给主人发 `/版本`。桌宠发现新版后可以直接点“下载并安装”，更新器会先备份将覆盖的公开代码文件。
 
 也可以在命令行更新，不需要重新 clone：
 
@@ -128,6 +128,8 @@ python src/update.py update --branch all-round --yes  # 安装指定分支
 ```
 
 更新包不会覆盖 `data/`、`persona/`、`memory/`、密钥、运行环境或自定义主题；更新前的代码备份放在 `backups/update-<时间>/`。
+
+需要 Windows 目录版 EXE 时，在仓库根目录运行 `python tools/package_windows.py --force`，然后双击 `dist/AIPet/AIPet.exe`。这是桌宠和本地聊天窗口的打包入口；打包目录里的 `data/`、`memory/` 和 `persona/` 仍是运行资料，请单独备份。
 
 把新版 zip 解压覆盖到旧目录**不会丢任何东西**：仓库的 zip 根本不含 `persona/` `memory/` `data/`，解压也不会删掉压缩包里没有的文件。
 

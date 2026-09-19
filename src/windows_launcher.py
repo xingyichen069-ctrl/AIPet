@@ -1,9 +1,37 @@
 """Windows GUI entry point with a readable startup log."""
 from datetime import datetime
+import os
 from pathlib import Path
 import runpy
 import sys
 import traceback
+
+
+_DLL_HANDLES = []
+
+
+def _prepare_frozen_dlls():
+    """Make PySide6 and shiboken6 sibling DLLs visible to the loader.
+
+    The wheels keep these DLLs in separate package directories.  Python adds
+    both directories while running from a virtualenv, but a PyInstaller build
+    has one ``_internal`` directory and otherwise misses ``shiboken6`` when
+    importing ``PySide6.QtCore``.
+    """
+    if not getattr(sys, 'frozen', False):
+        return
+    bundle = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
+    directories = [bundle, bundle / 'PySide6', bundle / 'shiboken6']
+    existing = [str(path) for path in directories if path.is_dir()]
+    if not existing:
+        return
+    os.environ['PATH'] = os.pathsep.join(existing + [os.environ.get('PATH', '')])
+    if hasattr(os, 'add_dll_directory'):
+        for path in existing:
+            try:
+                _DLL_HANDLES.append(os.add_dll_directory(path))
+            except OSError:
+                pass
 
 
 def main():
@@ -18,7 +46,15 @@ def main():
         try:
             print('\n[启动]', datetime.now().isoformat(timespec='seconds'))
             sys.argv = [str(root / 'src' / 'pet.py'), '--show-chat']
-            runpy.run_path(sys.argv[0], run_name='__main__')
+            if getattr(sys, 'frozen', False):
+                # PyInstaller stores Python modules in its embedded archive.
+                # Importing the real entry point keeps the frozen build from
+                # depending on a loose src/pet.py file at runtime.
+                _prepare_frozen_dlls()
+                from pet import main as pet_main
+                pet_main()
+            else:
+                runpy.run_path(sys.argv[0], run_name='__main__')
         except SystemExit:
             raise
         except Exception:

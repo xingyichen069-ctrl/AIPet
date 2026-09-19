@@ -60,11 +60,12 @@ try:
     from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QLineEdit, QMenu,
                                    QPushButton, QScrollArea, QSizePolicy, QTextEdit,
                                    QVBoxLayout, QWidget)
-except ImportError:
+except ImportError as exc:
     print("需要 PySide6：\n"
           "    pip install PySide6\n"
           "或临时运行：\n"
-          "    uv run --with PySide6 --no-project python src/pet.py")
+          "    uv run --with PySide6 --no-project python src/pet.py\n"
+          f"导入错误：{exc}")
     sys.exit(1)
 
 import memory as M          # noqa: E402

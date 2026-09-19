@@ -43,6 +43,7 @@ QPushButton#sendButton:pressed { background:#7f2c29; }
 QPushButton#sendButton:disabled { background:#d1aaa1; border-color:#d1aaa1; }
 QPushButton#attachmentTag { background:#fff4db; border:1px solid #dfc793; color:#866238; text-align:left; }
 QPushButton#moreButton { font-size:19px; padding:0; background:transparent; border-color:#dfcebc; }
+QPushButton#updateButton { color:#8c3933; padding:0 8px; }
 QPushButton#attachButton { font-size:20px; padding:0; }
 QScrollArea { border:0; background:transparent; }
 QScrollBar:vertical { background:transparent; width:7px; margin:3px 0; }
@@ -77,6 +78,7 @@ QPushButton#sendButton:pressed { background:#8f3738; }
 QPushButton#sendButton:disabled { background:#624044; border-color:#624044; color:#c4aca7; }
 QPushButton#attachmentTag { background:#302b29; border-color:#76613d; color:#dfc28c; }
 QPushButton#moreButton { border-color:#655048; }
+QPushButton#updateButton { color:#f0c6b5; }
 QScrollBar::handle:vertical { background:#64515a; }
 QScrollBar::handle:vertical:hover { background:#99736f; }
 QMenu { background:#222633; border-color:#59474b; }
@@ -382,6 +384,18 @@ class ChatWindow(QWidget):
         subtitle.setObjectName('chatSubtitle')
         title.addWidget(subtitle)
         top.addLayout(title, 1)
+        self.update_btn = QPushButton('检查更新')
+        self.update_btn.setObjectName('updateButton')
+        self.update_btn.setFixedSize(72, 34)
+        self.update_btn.setToolTip('检查 AIPet 是否有新版本')
+        check_update = getattr(self.pet, '_check_update', None)
+        if callable(check_update):
+            self.update_btn.clicked.connect(check_update)
+        else:
+            # Small test hosts and lightweight embedders may provide a chat
+            # window without the full desktop controller.
+            self.update_btn.setEnabled(False)
+        top.addWidget(self.update_btn)
         more = QPushButton('···')
         more.setObjectName('moreButton')
         more.setFixedSize(34, 34)
