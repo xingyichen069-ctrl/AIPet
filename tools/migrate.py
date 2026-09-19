@@ -76,6 +76,9 @@ ITEMS: list[tuple[str, str, str]] = [
     ("data/qq_token.json",        "密钥",   "QQ access_token 缓存"),
     ("data/qq.json",              "信道",   "主人绑定 + 认领口令状态"),
     ("data/qq_history.json",      "信道",   "各会话最近对话"),
+    # ★ 这条一开始漏了。QQ 收进来的图片落在 data/qq_media/，它不在
+    #   data/cache/ 底下，所以「缓存不搬」那条盖不住它 —— 是真丢了。
+    ("data/qq_media/**/*",        "媒体",   "QQ 收到的图片和文件"),
     ("data/config.json",          "配置",   "搜索后端、代理、沙箱根、隐私黑名单"),
     ("data/thinking.json",        "配置",   "五档预设 + 自动判定规则"),
     ("data/appearance.json",      "外观",   "主题、字号、玻璃质感"),
@@ -258,6 +261,9 @@ def selftest() -> int:
                                                     encoding="utf-8")
         (old / "data" / "cache").mkdir()
         (old / "data" / "cache" / "search.json").write_text("{}", encoding="utf-8")
+        # QQ 收进来的图，落在 data/qq_media/（不在 cache 底下，不能被"缓存不搬"盖住）
+        (old / "data" / "qq_media").mkdir()
+        (old / "data" / "qq_media" / "ROBOT1.0_abc.png").write_bytes(b"\x89PNG")
         (old / "data" / "qq.log").write_text("log", encoding="utf-8")
         (old / "backups").mkdir()
         (old / "backups" / "20260101-000000.zip").write_bytes(b"PK\x05\x06" + b"\x00" * 18)
@@ -279,6 +285,7 @@ def selftest() -> int:
         check_("记忆会搬", any("journal" in r for r in rels))
         check_("★ 密钥会搬", any("secrets.json" in r for r in rels))
         check_("信道绑定会搬", any("qq.json" in r for r in rels))
+        check_("★ QQ 收到的图会搬", any("qq_media" in r for r in rels))
         check_("缓存不搬", not any("cache" in r for r in rels))
         check_("日志不搬", not any(r.endswith("qq.log") for r in rels))
 
@@ -382,20 +389,31 @@ def guess_source(target: Path) -> list[Path]:
 
 def _startup_hint(old: Path) -> list[str]:
     """
-    开机自启里有没有还指着旧目录的快捷方式。
+    桌面上和开机自启里，有没有还指着旧目录的快捷方式。
 
     上次换目录（v0.3.1 → v0.4.0）踩过这个：代码和记忆都搬好了，
     开机自启却还指着旧路径，重启一次 QQ 就再也上不来。
+
+    ★ 一开始只扫了 Startup，桌面那个 小日和.lnk 就漏了 —— 而桌面上那个
+      才是他每天双击的。两个地方都扫，路径都从环境变量取，取不到就算。
     """
     import os
+    home = os.environ.get("USERPROFILE")
     appdata = os.environ.get("APPDATA")
-    if not appdata:
-        return []
-    startup = Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
-    if not startup.is_dir():
-        return []
-    return [f"  {p.name}" for p in sorted(startup.glob("*.lnk"))
-            if _lnk_points_to(p, str(old))]
+    dirs = []
+    if home:
+        # 桌面可能被 OneDrive 挪走，两个位置都试
+        dirs += [Path(home) / "Desktop", Path(home) / "OneDrive" / "Desktop"]
+    if appdata:
+        dirs.append(Path(appdata) / "Microsoft" / "Windows" / "Start Menu"
+                    / "Programs" / "Startup")
+    out = []
+    for d in dirs:
+        if not d.is_dir():
+            continue
+        out += [f"  {p.name}" for p in sorted(d.glob("*.lnk"))
+                if _lnk_points_to(p, str(old))]
+    return out
 
 
 def main() -> None:
@@ -518,10 +536,12 @@ def main() -> None:
 
     links = _startup_hint(source)
     if links:
-        print(f"\n  ★ 开机自启里还有快捷方式，它们可能指着旧目录 {source}：")
+        print(f"\n  ★ 桌面和开机自启里还有快捷方式，它们可能指着旧目录 {source}：")
         for line in links:
             print(line)
-        print("    搬完记得在快捷方式属性里把目标改成新目录，或者删掉重装一份。")
+        print("    搬完记得改：右键 → 属性 → 目标，目录和解释器都要换。")
+        print("    旧装用 runtime\\pythonw.exe，新装多半是 .venv\\Scripts\\pythonw.exe，")
+        print("    只把目录名替掉的话还是启动不了。")
 
     if args.dry_run:
         print("\n  干跑，什么都没动。\n")
