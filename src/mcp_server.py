@@ -54,7 +54,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 PROTOCOL_VERSIONS = ["2025-06-18", "2024-11-05"]
 DEFAULT_PROTOCOL = "2024-11-05"
-SERVER_INFO = {"name": "aipet", "version": "1.0.0"}
+SERVER_INFO = {"name": "aipet", "version": "0.5.0"}
 
 _log = lambda *a: print(*a, file=sys.stderr, flush=True)  # noqa: E731
 

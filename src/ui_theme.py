@@ -6,6 +6,8 @@ THEME_NAMES = {
     'marisa': '雾雨魔理沙 · 星屑魔法',
     'koishi': '古明地恋 · 无意识之庭',
     'cirno': '琪露诺 · 冰晶雾湖',
+    'satori': '古明地觉 · 觉之瞳',
+    'flandre': '芙兰朵露 · 彩翼夜宴',
 }
 TOUHOU_DAY = {
     'top': '#fffaf1', 'bottom': '#f5eddf',
@@ -31,6 +33,12 @@ PALETTES = {
     'cirno': (
         dict(top='#f6fcff', bottom='#dff1fb', vermilion='#3f9fcf', gold='#8ad4ef'),
         dict(top='#0f1c2b', bottom='#0a1420', vermilion='#7ecfee', gold='#a9e3f8')),
+    'satori': (
+        dict(top='#fff7f4', bottom='#f2e4ec', vermilion='#a83f55', gold='#d49a9d'),
+        dict(top='#271c2b', bottom='#1b1724', vermilion='#ef7b83', gold='#d2a1ad')),
+    'flandre': (
+        dict(top='#fff5f2', bottom='#f3dfe0', vermilion='#b83e4b', gold='#d6a35b'),
+        dict(top='#2a1822', bottom='#1c1420', vermilion='#f06a72', gold='#e0b05f')),
 }
 # Readable foregrounds and tinted control surfaces, including night variants.
 ROLES = {
@@ -52,6 +60,12 @@ ROLES = {
         #   换成同一套里的深蓝，白字 5.5:1。
         ('#203a4c', '#5f7d90', '#b9d9e9', '#ddf0fa', '#2b6f97', '#3f9fcf', '#f6fcff', '#2b6f97', '#ffffff', '#f9fdff', '#e3f3fb'),
         ('#dcebf6', '#8ea9bd', '#2f4b60', '#365a71', '#c3e9fb', '#7ecfee', '#0f1c2b', '#7ecfee', '#08202e', '#111f2f', '#1b3549')),
+    'satori': (
+        ('#4e3038', '#82656b', '#e0c5c7', '#f5dfe0', '#8b3349', '#b64a5d', '#fff8f5', '#ad4052', '#fff8f5', '#fffdfb', '#f6e3e3'),
+        ('#f4e5e5', '#c1a4aa', '#5e3e4b', '#51313e', '#ffd8d8', '#ef7b83', '#271c2b', '#d25b67', '#2b1520', '#2b202e', '#4b2935')),
+    'flandre': (
+        ('#552c32', '#8a6763', '#e4c0b5', '#f6d8cc', '#983743', '#b83e4b', '#fff7f3', '#ad3d48', '#fff7f2', '#fffdfb', '#f7e2dc'),
+        ('#f6e4de', '#c5a6a0', '#65414a', '#58303b', '#ffd1c4', '#f06a72', '#2a1822', '#d95762', '#2a1219', '#30212b', '#4c2730')),
 }
 ROLE_KEYS = ('text', 'muted', 'border', 'hover', 'selected', 'blue', 'surface', 'button', 'button_text', 'bubble', 'user')
 

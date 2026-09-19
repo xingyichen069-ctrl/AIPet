@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QMenu, QWidget, QWidgetAction, QMessageBox
 from ui_theme import THEME_NAMES, is_daytime
 
 
-def draw_motif(p, theme, rect, colours, roles):
+def draw_motif(p, theme, rect, colours, roles, phase=0.0):
     """Draw a vector motif in a normalized 52-pixel square."""
     p.save()
     p.translate(rect.x(), rect.y())
@@ -26,6 +26,10 @@ def draw_motif(p, theme, rect, colours, roles):
         p.setBrush(QColor(colours['gold']))
         p.drawPath(star)
     elif theme == 'koishi':
+        pulse = 1.0 + (0.08 * max(0.0, math.sin(phase * math.tau)))
+        p.translate(26, 26)
+        p.scale(pulse, pulse)
+        p.translate(-26, -26)
         p.setPen(QPen(QColor(roles['blue']), 1.6))
         cord = QPainterPath(QPointF(26, 41))
         cord.cubicTo(55, 50, 51, 8, 37, 13)
@@ -42,6 +46,39 @@ def draw_motif(p, theme, rect, colours, roles):
         lid = QPainterPath(QPointF(18, 24))
         lid.quadTo(26, 30, 34, 24)
         p.drawPath(lid)
+    elif theme == 'satori':
+        # 觉之瞳：红色第三只眼，phase 的短窗口表示眨眼。
+        blink = 1.55 < (phase % 3.0) < 1.78
+        p.setPen(QPen(QColor(colours['vermilion']), 1.8))
+        eye = QPainterPath(QPointF(13, 26))
+        eye.quadTo(26, 12 if not blink else 24, 39, 26)
+        eye.quadTo(26, 40 if not blink else 28, 13, 26)
+        p.setBrush(QColor('#f9d7d5'))
+        p.drawPath(eye)
+        if not blink:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(colours['vermilion']))
+            p.drawEllipse(QPointF(26, 26), 5.0, 5.0)
+            p.setBrush(QColor('#321724'))
+            p.drawEllipse(QPointF(26, 26), 2.0, 2.0)
+    elif theme == 'flandre':
+        # 七色结晶翼：轻微左右摆动，不做连续旋转。
+        wobble = math.sin(phase * math.tau * 1.5) * 2.0 if phase else 0.0
+        p.save()
+        p.translate(wobble, 0)
+        for i, colour in enumerate(('#f05b68', '#f09c4b', '#efd45b', '#75c878',
+                                    '#63c8df', '#758fe4', '#b47bdc')):
+            x, y = 8 + i * 6.0, 11 + (i % 2) * 5
+            crystal = QPainterPath(QPointF(x, y - 4))
+            crystal.lineTo(QPointF(x + 4, y)); crystal.lineTo(QPointF(x, y + 4))
+            crystal.lineTo(QPointF(x - 4, y)); crystal.closeSubpath()
+            p.setPen(Qt.NoPen); p.setBrush(QColor(colour)); p.drawPath(crystal)
+        p.restore()
+        p.setPen(QPen(QColor(colours['vermilion']), 1.2))
+        p.setBrush(QColor('#f7d6d8'))
+        p.drawEllipse(QRectF(17, 18, 18, 16))
+        p.setPen(Qt.NoPen); p.setBrush(QColor(colours['gold']))
+        p.drawEllipse(QPointF(26, 26), 3.0, 3.0)
     elif theme == 'cirno':
         # 六角雪花。不是随便挑的 —— 官方设定写她背后长着「三對六棱柱狀翅膀」，
         # 六棱柱就是六角，所以六角雪花的来历是有据的。

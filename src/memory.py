@@ -35,6 +35,7 @@ memory.py —— AIPet 的记忆引擎
 
 from __future__ import annotations
 
+import heapq
 import json
 import math
 import shutil
@@ -55,6 +56,11 @@ if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("
 ROOT = Path(__file__).resolve().parent.parent
 CJK = r"一-鿿"
 ACTIVE_MESSAGE = contextvars.ContextVar("aipet_message", default=None)
+_TOKEN_RE = re.compile(r"[a-z0-9_]{2,}")
+_CJK_RE = re.compile(rf"[{CJK}]+")
+_JOURNAL_CACHE: dict[str, object] = {"sig": None, "entries": None}
+_TOKEN_CACHE: dict[str, set[str]] = {}
+_TS_CACHE: dict[str, datetime] = {}
 
 
 # ---------------------------------------------------------------- 配置
@@ -107,14 +113,18 @@ def now_iso() -> str:
 
 
 def parse_ts(ts: str) -> datetime:
-    return datetime.fromisoformat(ts)
+    cached = _TS_CACHE.get(ts)
+    if cached is None:
+        cached = datetime.fromisoformat(ts)
+        _TS_CACHE[ts] = cached
+    return cached
 
 
 def tokenize(text: str) -> set[str]:
     """中文按字 + 二元组，英文按词。够用，且不用装分词库。"""
     text = text.lower()
-    toks: set[str] = set(re.findall(r"[a-z0-9_]{2,}", text))
-    for m in re.finditer(rf"[{CJK}]+", text):
+    toks: set[str] = set(_TOKEN_RE.findall(text))
+    for m in _CJK_RE.finditer(text):
         s = m.group()
         toks.update(s)                                   # 单字
         toks.update(s[i:i + 2] for i in range(len(s) - 1))  # 相邻二字
@@ -189,6 +199,17 @@ def load_journal() -> list[dict]:
     f = _p("journal")
     if not f.exists():
         return []
+    control = ROOT / "data" / "companion.sqlite3"
+    sig_parts = []
+    for candidate in (f, control):
+        try:
+            st = candidate.stat()
+            sig_parts.append((str(candidate), st.st_mtime_ns, st.st_size))
+        except OSError:
+            sig_parts.append((str(candidate), None, None))
+    sig = tuple(sig_parts)
+    if sig == _JOURNAL_CACHE["sig"] and _JOURNAL_CACHE["entries"] is not None:
+        return _JOURNAL_CACHE["entries"]  # type: ignore[return-value]
     out = []
     with open(f, encoding="utf-8") as fh:
         for line in fh:
@@ -198,7 +219,6 @@ def load_journal() -> list[dict]:
                     out.append(json.loads(line))
                 except json.JSONDecodeError:
                     continue
-    control = ROOT / "data" / "companion.sqlite3"
     if control.exists():
         import sqlite3
         import hashlib
@@ -214,6 +234,8 @@ def load_journal() -> list[dict]:
         finally:
             db.close()
         out = [e for e in out if (e['id'], hashlib.sha256(e['text'].encode()).hexdigest()) not in blocked]
+    _JOURNAL_CACHE["sig"] = sig
+    _JOURNAL_CACHE["entries"] = out
     return out
 
 
@@ -222,6 +244,8 @@ def append_journal(entry: dict) -> None:
     f.parent.mkdir(parents=True, exist_ok=True)
     with open(f, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    _JOURNAL_CACHE["sig"] = None
+    _JOURNAL_CACHE["entries"] = None
 
 
 def save_journal(entries: list[dict]) -> None:
@@ -229,6 +253,8 @@ def save_journal(entries: list[dict]) -> None:
     with open(f, "w", encoding="utf-8") as fh:
         for e in entries:
             fh.write(json.dumps(e, ensure_ascii=False) + "\n")
+    _JOURNAL_CACHE["sig"] = None
+    _JOURNAL_CACHE["entries"] = None
 
 
 def load_state() -> dict:
@@ -410,6 +436,19 @@ def _keyword_score(entry_toks: set[str], query_toks: set[str]) -> float:
     return 0.7 * cov_q + 0.3 * cov_e
 
 
+def _entry_tokens(entry: dict) -> set[str]:
+    """复用记忆条目的分词结果，避免高量检索时反复扫描正文。"""
+    text = entry.get("text", "")
+    key = f"{entry.get('id', '')}\0{text}"
+    toks = _TOKEN_CACHE.get(key)
+    if toks is None:
+        toks = tokenize(text)
+        if len(_TOKEN_CACHE) >= 4096:
+            _TOKEN_CACHE.clear()
+        _TOKEN_CACHE[key] = toks
+    return toks
+
+
 def _recency_factor(entry: dict, ref: datetime) -> float:
     # 外人的记忆走独立衰减曲线 —— 群里的闲聊一周左右就该淡出，
     # 不该跟主人的记忆用同一条时间线。
@@ -429,8 +468,9 @@ def _recency_factor(entry: dict, ref: datetime) -> float:
 
 
 def score_entry(entry: dict, query_toks: set[str], ref: datetime,
-                query_tags: set[str] | None = None) -> float:
-    kw = _keyword_score(tokenize(entry.get("text", "")), query_toks)
+                query_tags: set[str] | None = None,
+                entry_toks: set[str] | None = None) -> float:
+    kw = _keyword_score(entry_toks or _entry_tokens(entry), query_toks)
     if kw <= 0:
         return 0.0
 
@@ -460,9 +500,14 @@ def retrieve(query: str, query_tags: list[str] | None = None,
     qtoks = tokenize(query)
     qtags = set(query_tags or [])
 
-    scored = [(score_entry(e, qtoks, ref, qtags), e) for e in entries]
-    scored = [(s, e) for s, e in scored if s >= r["min_score"]]
-    scored.sort(key=lambda x: x[0], reverse=True)
+    # 保留固定大小候选，避免每次对完整记忆库做 O(n log n) 排序。
+    scored = []
+    for e in entries:
+        s = score_entry(e, qtoks, ref, qtags)
+        if s >= r["min_score"]:
+            scored.append((s, e))
+    candidate_k = min(len(scored), max(k * 4, 64))
+    scored = heapq.nlargest(candidate_k, scored, key=lambda x: x[0])
 
     picked: list[dict] = []
     used = 0

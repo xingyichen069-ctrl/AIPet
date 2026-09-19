@@ -165,9 +165,8 @@ class Desktop(unittest.TestCase):
         self.chat.load_attachment(material)
         attachment = dict(self.chat.attachment)
         history = self.store.history()
-        # 从 THEME_NAMES 取，别在这里另抄一份主题列表 ——
-        # 抄了就会漏：加了 cirno 之后这个测试照样绿，因为它在测旧的三套。
-        for theme in ('cirno', 'marisa', 'koishi', 'touhou'):
+        # 从 THEME_NAMES 取，主题列表增加时测试自动覆盖新配色。
+        for theme in ui_theme.THEME_NAMES:
             self.chat.change_appearance('theme', theme)
             for day in (True, False):
                 with patch.object(UI, 'is_daytime', return_value=day):

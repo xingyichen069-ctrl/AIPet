@@ -6,7 +6,7 @@ import sys
 import time
 from PySide6.QtCore import Qt, QTimer, Signal, QUrl, QRectF, QPointF, QByteArray, Slot
 from PySide6.QtGui import (QDesktopServices, QKeySequence, QShortcut, QTextCursor,
-    QPainter, QColor, QPen, QPainterPath, QLinearGradient, QPalette)
+    QPainter, QColor, QPen, QPainterPath, QLinearGradient, QPalette, QFont)
 from PySide6.QtWidgets import (QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QPlainTextEdit, QScrollArea, QMenu, QFileDialog, QInputDialog, QDialog, QListWidget,
     QMessageBox, QApplication)
@@ -123,6 +123,7 @@ class ShrineEmblem(QWidget):
         self._spinning = False
         self._quiet = False
         self._angle = 0.0
+        self._phase = 0.0
         self._pulse_started = None
         self._last_frame = time.monotonic()
         self.animation_timer = QTimer(self)
@@ -134,10 +135,14 @@ class ShrineEmblem(QWidget):
     def start_waiting(self):
         self._spinning = True
         self._pulse_started = None
+        self._phase = 0.0
         self._sync_animation()
 
     def finish(self, success=True):
         self._spinning = False
+        # 固定回到稳定帧：觉的眼睛保持睁开，恋的心脏不留在放大状态。
+        self._phase = 0.0
+        self._angle = 0.0
         self._pulse_started = time.monotonic() if success and not self._quiet and self.isVisible() else None
         self._sync_animation()
 
@@ -160,7 +165,13 @@ class ShrineEmblem(QWidget):
     def _animate(self):
         now = time.monotonic()
         if self._spinning:
-            self._angle = (self._angle + min(now - self._last_frame, .1) * 36) % 360
+            elapsed = now - self._last_frame
+            mode = self._animation_mode()
+            if mode == 'spin':
+                self._angle = (self._angle + min(elapsed, .1) * 36) % 360
+            else:
+                self._angle = 0.0
+            self._phase += min(elapsed, .1)
         self._last_frame = now
         if self._pulse_started is not None and now - self._pulse_started >= 1.2:
             self._pulse_started = None
@@ -184,7 +195,8 @@ class ShrineEmblem(QWidget):
         p.translate(26, 26)
         p.rotate(self._angle)
         p.translate(-26, -26)
-        draw_motif(p, self.theme, QRectF(0, 0, 52, 52), self.colours, self.roles)
+        phase = self._phase if self._spinning else 0.0
+        draw_motif(p, self.theme, QRectF(0, 0, 52, 52), self.colours, self.roles, phase)
         p.restore()
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(self.colours['gold']))
@@ -203,6 +215,13 @@ class ShrineEmblem(QWidget):
                 p.translate(19 + progress * 5, 0)
                 p.drawEllipse(QRectF(-1.8, -.8, 3.6, 1.6))
                 p.restore()
+
+    def _animation_mode(self):
+        return {
+            'koishi': 'heartbeat',
+            'satori': 'blink',
+            'flandre': 'wing_shake',
+        }.get(self.theme, 'spin')
 
 
 class ShrineDivider(QWidget):
@@ -549,6 +568,16 @@ class ChatWindow(QWidget):
         super().resizeEvent(event)
         if hasattr(self, '_glass'):
             self._glass.resize()
+        if hasattr(self, 'scroll'):
+            max_width = max(220, min(780, int(self.scroll.viewport().width() * .82)))
+            point_size = max(10.0, min(13.0, 10.0 + self.scroll.viewport().width() / 520))
+            for bubble in self.findChildren(QLabel):
+                if bubble.objectName() in ('userBubble', 'petBubble', 'sysBubble'):
+                    bubble.setMaximumWidth(max_width)
+                    font = bubble.font()
+                    font.setPointSizeF(point_size)
+                    bubble.setFont(font)
+                    bubble.updateGeometry()
         self._schedule_save()
 
     def paintEvent(self, event):
@@ -620,7 +649,7 @@ class ChatWindow(QWidget):
         b.setTextFormat(Qt.PlainText)
         b.setWordWrap(True)
         b.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        b.setMaximumWidth(max(180, int(self.width() * .76)))
+        b.setMaximumWidth(max(220, min(780, int(self.scroll.viewport().width() * .82))))
         b.setObjectName('userBubble' if role == 'user' else 'petBubble' if role == 'assistant' else 'sysBubble')
         if mid and role == 'user':
             b.setContextMenuPolicy(Qt.CustomContextMenu)
