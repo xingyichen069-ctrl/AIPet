@@ -40,6 +40,7 @@ live2d_widget.py —— 把 Live2D 模型画进 Qt 窗口
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt, Signal
@@ -111,6 +112,8 @@ class Live2DWidget(QOpenGLWidget):
         self._press_pos = None
         self._win_off = None       # 拖动时记录的窗口偏移
         self._drag_dist = 0
+        self._dragging = False
+        self._suppress_double_click_until = 0.0
         self._hovering = False
         self._quiet = False
         self._activity = "idle"
@@ -270,7 +273,9 @@ class Live2DWidget(QOpenGLWidget):
         try:
             img = self.grabFramebuffer()
             if img.isNull():
-                return 255                      # 取不到就当成不透明，别把功能弄没
+                # 取不到帧缓冲时不能把整块 OpenGL 画布当成角色。
+                # 这里宁可暂时不响应，也不能让透明区域继续误触。
+                return 0
             dpr = img.width() / max(1, self.width())
             x = int(px * dpr)
             y = int(py * dpr)
@@ -278,7 +283,18 @@ class Live2DWidget(QOpenGLWidget):
                 return 0
             return img.pixelColor(x, y).alpha()
         except Exception:                        # noqa: BLE001
-            return 255
+            # OpenGL 上下文短暂不可用（例如窗口刚显示或正在重载模型）
+            # 时，同样按透明处理，避免把整块窗口误判成身体。
+            return 0
+
+    def _model_hit_at(self, px: float, py: float) -> bool:
+        """Return whether an actually rendered character pixel is under the point."""
+        if not (self._ready and self.model):
+            return False
+        # The Cubism Body hit area is intentionally broad and excludes some
+        # visible limbs.  The framebuffer alpha is the precise silhouette and
+        # keeps every visible part clickable while making surrounding space inert.
+        return self._alpha_at(px, py) > 24
 
     def mouseMoveEvent(self, e):
         pos = e.position()
@@ -286,7 +302,11 @@ class Live2DWidget(QOpenGLWidget):
         # 按住左键 = 拖窗口；否则 = 视线跟踪 + 悬停反馈
         if (e.buttons() & Qt.LeftButton) and self._win_off is not None:
             self.window().move(e.globalPosition().toPoint() - self._win_off)
-            self._drag_dist += 1
+            if self._press_pos is not None:
+                delta = e.position() - self._press_pos
+                self._drag_dist = max(self._drag_dist, int((delta.x() ** 2 + delta.y() ** 2) ** 0.5))
+            if self._drag_dist >= 8:
+                self._dragging = True
         elif self._ready and self.model:
             try:
                 self.model.Drag(*self._to_model(pos.x(), pos.y()))
@@ -294,7 +314,7 @@ class Live2DWidget(QOpenGLWidget):
                 pass
 
             # 只有真正悬在角色身上才算"进入"，透明区域不算
-            on_body = self._alpha_at(pos.x(), pos.y()) > 24
+            on_body = self._model_hit_at(pos.x(), pos.y())
             if on_body != self._hovering:
                 self._hovering = on_body
                 self.setCursor(Qt.PointingHandCursor if on_body else Qt.ArrowCursor)
@@ -313,6 +333,7 @@ class Live2DWidget(QOpenGLWidget):
             self._win_off = (e.globalPosition().toPoint()
                              - self.window().frameGeometry().topLeft())
             self._drag_dist = 0
+            self._dragging = False
         super().mousePressEvent(e)
 
     def mouseReleaseEvent(self, e):
@@ -330,15 +351,27 @@ class Live2DWidget(QOpenGLWidget):
         self._press_pos = None
         self._win_off = None
 
-        if dist >= 6:
+        if self._dragging or dist >= 8:
+            self._dragging = False
+            self._suppress_double_click_until = time.monotonic() + 0.25
             self.drag_finished.emit()
-        elif self._alpha_at(pos.x(), pos.y()) > 24:
+            e.accept()
+            return
+        elif self._model_hit_at(pos.x(), pos.y()):
             # 点在角色身上才算数。周围那片透明的空气不响应——
             # 之前整个 260x380 的矩形都吃点击，动不动就误触。
             self.clicked.emit(self.hit_local(pos.x(), pos.y()))
         else:
             self.clicked.emit("")               # 空点，交给上层决定（比如什么都不做）
-        super().mouseReleaseEvent(e)
+        e.accept()
+
+    def mouseDoubleClickEvent(self, e):
+        # A drag can be reported as a double click by the window system when
+        # the release lands close to a second press.  Never forward that event.
+        if self._dragging or time.monotonic() < self._suppress_double_click_until:
+            e.accept()
+            return
+        super().mouseDoubleClickEvent(e)
 
     # 头顶往下这个比例以内算"头"
     HEAD_RATIO = 0.42
@@ -347,14 +380,11 @@ class Live2DWidget(QOpenGLWidget):
         """
         命中测试。返回 'Head' / 'Body' / ''。
 
-        ★ 不用 model.HitTest()。Hiyori 的 model3.json 里**只定义了一个
-        命中区叫 Body，没有 Head** —— 调 HitTest("Head") 永远返回 False，
-        点头的分支根本不会触发。
-
-        改成按几何分区：窗口上面 HEAD_RATIO 那块算头，其余算身体。
-        不依赖模型自带的命中区，换模型也能用。
+        Hiyori 的 model3.json 只定义了一个命中区叫 Body，没有 Head。
+        先通过实际不透明像素过滤透明区域，再按几何分区区分头和身体。
+        这样不会把整个 OpenGL 画布都当成可点击区域。
         """
-        if not (self._ready and self.model):
+        if not self._model_hit_at(px, py):
             return ""
         if py < self.height() * self.HEAD_RATIO:
             return "Head"

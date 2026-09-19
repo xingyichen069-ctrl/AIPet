@@ -896,7 +896,10 @@ class PetWindow(QWidget):
         self.state = load_state()
         self.pix = QPixmap(str(ensure_asset()))
         self.drag_from: QPoint | None = None
+        self._press_pos: QPoint | None = None
         self.dragged = False
+        self._dragging = False
+        self._suppress_double_click_until = 0.0
 
         flags = (Qt.FramelessWindowHint | Qt.Tool | Qt.NoDropShadowWindowHint)
         if self.state.get("topmost", True):
@@ -1029,9 +1032,18 @@ class PetWindow(QWidget):
             self.chat.input.setFocus()
 
     def mouseDoubleClickEvent(self, e):
-        if e.button() == Qt.LeftButton:
+        if e.button() != Qt.LeftButton:
+            e.ignore()
+            return
+        # 某些窗口系统会在拖动结束后补发一次 double-click。拖动完成后的
+        # 短暂屏蔽窗口级双击，避免移动桌宠时误开对话框。
+        if self._dragging or time.monotonic() < self._suppress_double_click_until:
+            e.accept()
+            return
+        if self._body_at(e.position()):
             self.open_chat()
             self.dragged = True          # 别让双击后的 release 触发面板切换
+        e.accept()
 
     # ---------------------------------------------------------- 位置
 
@@ -1160,24 +1172,57 @@ class PetWindow(QWidget):
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
             self.drag_from = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self._press_pos = e.globalPosition().toPoint()
             self.dragged = False
+            self._dragging = False
         elif e.button() == Qt.RightButton:
             self._menu(e.globalPosition().toPoint())
 
     def mouseMoveEvent(self, e):
         if self.drag_from is not None and (e.buttons() & Qt.LeftButton):
-            self.dragged = True
+            if self._press_pos is not None:
+                delta = e.globalPosition().toPoint() - self._press_pos
+                if self._dragging or delta.manhattanLength() >= QApplication.startDragDistance():
+                    self._dragging = True
+                    self.dragged = True
             self.move(e.globalPosition().toPoint() - self.drag_from)
             if self.panel.isVisible():
                 self.panel.reposition()
 
     def mouseReleaseEvent(self, e):
         if e.button() == Qt.LeftButton:
-            if self.dragged:
+            if self._dragging or self.dragged:
                 self._persist()
-            else:
+                self._suppress_double_click_until = time.monotonic() + 0.25
+            elif self._body_at(e.position()):
                 self._toggle_panel()
             self.drag_from = None
+            self._press_pos = None
+            self._dragging = False
+
+    def _body_at(self, pos) -> bool:
+        """Guard parent-window fallbacks so transparent canvas space is inert."""
+        if self.gl is None:
+            # 静态图模式也只接受图片实际有内容的像素；PNG 周围的透明边缘
+            # 不应因为落在窗口矩形里就触发面板或对话框。
+            try:
+                if self.pix.isNull():
+                    return False
+                image = self.pix.toImage()
+                x = int(pos.x() * image.width() / max(1, self.width()))
+                y = int(pos.y() * image.height() / max(1, self.height()))
+                if not (0 <= x < image.width() and 0 <= y < image.height()):
+                    return False
+                return image.pixelColor(x, y).alpha() > 24
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                return False
+        try:
+            local = self.gl.mapFrom(self, pos.toPoint())
+            # 对话框和思考面板都只由身体区域触发；头部点击仍交给
+            # Live2D 自己的反馈逻辑，不会在双击时绕过这个限制开对话。
+            return self.gl.hit_local(local.x(), local.y()) == "Body"
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return False
 
     def _toggle_panel(self):
         if self.panel.isVisible() and self.panel.windowOpacity() > 0.5:
