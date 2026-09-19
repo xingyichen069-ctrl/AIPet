@@ -110,6 +110,7 @@ class Live2DWidget(QOpenGLWidget):
         self.model = None
         self._ready = False
         self._press_pos = None
+        self._press_global_pos = None
         self._win_off = None       # 拖动时记录的窗口偏移
         self._drag_dist = 0
         self._dragging = False
@@ -302,8 +303,8 @@ class Live2DWidget(QOpenGLWidget):
         # 按住左键 = 拖窗口；否则 = 视线跟踪 + 悬停反馈
         if (e.buttons() & Qt.LeftButton) and self._win_off is not None:
             self.window().move(e.globalPosition().toPoint() - self._win_off)
-            if self._press_pos is not None:
-                delta = e.position() - self._press_pos
+            if self._press_global_pos is not None:
+                delta = e.globalPosition().toPoint() - self._press_global_pos
                 self._drag_dist = max(self._drag_dist, int((delta.x() ** 2 + delta.y() ** 2) ** 0.5))
             if self._drag_dist >= 8:
                 self._dragging = True
@@ -330,6 +331,7 @@ class Live2DWidget(QOpenGLWidget):
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
             self._press_pos = e.position()
+            self._press_global_pos = e.globalPosition().toPoint()
             self._win_off = (e.globalPosition().toPoint()
                              - self.window().frameGeometry().topLeft())
             self._drag_dist = 0
@@ -343,12 +345,13 @@ class Live2DWidget(QOpenGLWidget):
 
         # 判断是"点击"还是"拖动"。按位移像素数算，比按距离准。
         dist = 0.0
-        if self._press_pos is not None:
-            d = e.position() - self._press_pos
+        if self._press_global_pos is not None:
+            d = e.globalPosition().toPoint() - self._press_global_pos
             dist = (d.x() ** 2 + d.y() ** 2) ** 0.5
 
         pos = e.position()
         self._press_pos = None
+        self._press_global_pos = None
         self._win_off = None
 
         if self._dragging or dist >= 8:
