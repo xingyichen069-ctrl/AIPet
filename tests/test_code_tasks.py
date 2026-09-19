@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import time
@@ -66,6 +67,67 @@ class CodeTaskTests(unittest.TestCase):
                     )
                     self.assertGreaterEqual(send.call_count, 2)
                     self.assertEqual(media.call_count, 1)
+
+    def test_manager_accepts_local_window_context_and_notifies_callback(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "tasks"
+            with patch.object(CT, "TASKS_ROOT", root), \
+                    patch.object(CT, "INDEX_FILE", root / "index.json"):
+                events = []
+
+                def fake_ask(manager, task, instruction):
+                    task.root.mkdir(parents=True, exist_ok=True)
+                    (task.root / "local.txt").write_text(instruction, encoding="utf-8")
+                    return "本地任务完成\nTASK_STATUS: DONE", {}
+
+                ctx = {
+                    "source": "local",
+                    "is_owner": True,
+                    "actor_id": "local",
+                    "actor_name": "本地窗口",
+                    "conversation_key": "local:test-session",
+                    "task_notify": events.append,
+                }
+                with patch.object(CT.TaskManager, "_ask", fake_ask):
+                    manager = CT.TaskManager()
+                    with patch.object(CT, "manager", return_value=manager):
+                        with LT.bind_context(**ctx, query="写本地结果"):
+                            ack = LT.code_task("start", "写本地结果")
+                    self.assertIn("ct-", ack)
+                    for _ in range(100):
+                        task = manager.latest_for(ctx)
+                        if task and not task.worker_started:
+                            break
+                        time.sleep(0.01)
+                    task = manager.latest_for(ctx)
+                    self.assertIsNotNone(task)
+                    self.assertEqual(task.state, "completed")
+                    self.assertEqual(task.artifacts, ["local.txt"])
+                    self.assertEqual(
+                        (task.root / "local.txt").read_text(encoding="utf-8"), "写本地结果"
+                    )
+                    self.assertTrue(any("代码任务" in x for x in events))
+                    self.assertTrue(any("本地任务完成" in x for x in events))
+                    self.assertTrue(any("local.txt" in x for x in events))
+
+    def test_task_index_merges_records_from_other_process(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "tasks"
+            with patch.object(CT, "TASKS_ROOT", root), \
+                    patch.object(CT, "INDEX_FILE", root / "index.json"), \
+                    patch.object(CT.TaskManager, "_start_worker"):
+                first = CT.TaskManager()
+                second = CT.TaskManager()
+                first.submit({
+                    "source": "local", "is_owner": True, "actor_id": "local",
+                    "conversation_key": "local:first",
+                }, "第一个任务")
+                second.submit({
+                    "source": "qq", "is_owner": True, "actor_id": "U1",
+                    "conversation_key": "c2c:U1",
+                }, "第二个任务")
+                records = json.loads((root / "index.json").read_text(encoding="utf-8"))
+                self.assertEqual({item["title"] for item in records}, {"第一个任务", "第二个任务"})
 
     def test_upload_file_uses_prepare_parts_and_rich_media(self):
         with tempfile.TemporaryDirectory() as d:

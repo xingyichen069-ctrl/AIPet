@@ -2,10 +2,10 @@
 """
 后台代码任务。
 
-QQ 普通对话必须在被动回复窗口内结束；写程序、跑脚本、制图或整理文件
-则可能需要几十秒甚至更久。这个模块把这两条路径分开：主人明确提出产物
-任务后，给模型一个独立工作目录，模型可以用 fs_*、web_search 和 run_python
-反复检查结果，最后再用 QQ 主动消息回传。
+普通对话必须在当前回复窗口内结束；写程序、跑脚本、制图或整理文件则可能
+需要几十秒甚至更久。这个模块把这两条路径分开：主人明确提出产物任务后，
+给模型一个独立工作目录，模型可以用 fs_*、web_search 和 run_python 反复检查
+结果，最后回到发起任务的本地窗口或 QQ 会话。
 
 这里的目录隔离是 AIPet 工具层的边界，不是操作系统安全沙箱。第一阶段只
 允许主人调用，后续仍应把不可信代码迁移到真正的受限运行环境。
@@ -13,7 +13,9 @@ QQ 普通对话必须在被动回复窗口内结束；写程序、跑脚本、�
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import re
 import threading
 import uuid
@@ -74,6 +76,42 @@ def _event_snapshot(ev: Any) -> dict:
     }
 
 
+def _index_records() -> list[dict]:
+    try:
+        raw = json.loads(INDEX_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
+
+
+@contextlib.contextmanager
+def _index_lock():
+    """跨桌面进程和 QQ 桥合并任务索引，避免互相覆盖。"""
+    TASKS_ROOT.mkdir(parents=True, exist_ok=True)
+    lock_path = INDEX_FILE.with_suffix(".lock")
+    with lock_path.open("a+b") as handle:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 @dataclass
 class CodeTask:
     task_id: str
@@ -81,6 +119,8 @@ class CodeTask:
     actor_id: str
     actor_name: str
     event: Any = None
+    # 本地聊天窗口通过这个回调接收后台进度；QQ 任务仍使用 event 主动发消息。
+    notify: Any = field(default=None, repr=False)
     root: Path = field(default_factory=lambda: TASKS_ROOT)
     state: str = "queued"
     title: str = ""
@@ -118,11 +158,7 @@ class TaskManager:
 
     # ── 索引 ────────────────────────────────────────────────
     def _load(self) -> None:
-        try:
-            raw = json.loads(INDEX_FILE.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return
-        for item in raw if isinstance(raw, list) else []:
+        for item in _index_records():
             if not isinstance(item, dict):
                 continue
             task_id = str(item.get("task_id") or "")
@@ -148,14 +184,21 @@ class TaskManager:
 
     def _persist(self) -> None:
         with self._lock:
-            items = sorted(self._tasks.values(),
-                           key=lambda t: t.updated_at, reverse=True)[:MAX_PERSISTED_TASKS]
-            body = [t.public() for t in items]
+            local = {t.task_id: t.public() for t in self._tasks.values()}
         try:
-            TASKS_ROOT.mkdir(parents=True, exist_ok=True)
-            tmp = INDEX_FILE.with_suffix(".tmp")
-            tmp.write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(INDEX_FILE)
+            with _index_lock():
+                merged = {}
+                for item in _index_records():
+                    task_id = str(item.get("task_id") or "")
+                    if re.fullmatch(r"ct-[a-f0-9]{10}", task_id):
+                        merged[task_id] = item
+                merged.update(local)
+                body = sorted(merged.values(),
+                              key=lambda item: str(item.get("updated_at") or ""),
+                              reverse=True)[:MAX_PERSISTED_TASKS]
+                tmp = INDEX_FILE.with_suffix(".tmp")
+                tmp.write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
+                tmp.replace(INDEX_FILE)
         except OSError:
             # 任务本身仍可继续；状态索引只是恢复和查询的辅助。
             pass
@@ -185,7 +228,7 @@ class TaskManager:
             return "只有已认证的主人可以启动本地代码任务。"
         key, actor = _conversation_key(ctx), _actor_id(ctx)
         if not key or not actor:
-            return "当前消息没有完整的 QQ 会话身份，暂时不能启动代码任务。"
+            return "当前对话没有完整的会话身份，暂时不能启动代码任务。"
         text = str(instruction or "").strip()
         if not text:
             return "请把要实现的功能说完整，我才能启动代码任务。"
@@ -194,6 +237,7 @@ class TaskManager:
         task = CodeTask(task_id=task_id, conversation_key=key,
                         actor_id=actor, actor_name=str(ctx.get("actor_name") or "主人"),
                         event=ctx.get("event"), root=self._root_for(task_id),
+                        notify=ctx.get("task_notify"),
                         title=_redact(text))
         task.pending.append(text)
         with self._lock:
@@ -212,11 +256,13 @@ class TaskManager:
         with self._lock:
             task = self._find(ctx, task_id)
             if task is None:
-                return "当前 QQ 会话没有找到属于你的本地代码任务。"
+                return "当前对话没有找到属于你的本地代码任务。"
             if task.state == "cancelled":
                 return f"任务 {task.task_id} 已取消；要重新做请重新启动。"
             if task.event is None:
                 task.event = ctx.get("event")
+            if task.notify is None:
+                task.notify = ctx.get("task_notify")
             task.pending.append(text)
             task.updated_at = _now()
         self._persist()
@@ -227,14 +273,14 @@ class TaskManager:
         with self._lock:
             task = self._find(ctx, task_id)
             if task is None:
-                return "当前 QQ 会话没有找到属于你的本地代码任务。"
+                return "当前对话没有找到属于你的本地代码任务。"
             return self._status_text(task)
 
     def cancel(self, ctx: dict, task_id: str = "") -> str:
         with self._lock:
             task = self._find(ctx, task_id)
             if task is None:
-                return "当前 QQ 会话没有找到属于你的本地代码任务。"
+                return "当前对话没有找到属于你的本地代码任务。"
             task.cancel_event.set()
             task.pending.clear()
             task.state = "cancelled"
@@ -275,11 +321,9 @@ class TaskManager:
                 with self._lock:
                     if task.cancel_event.is_set():
                         task.state = "cancelled"
-                        task.worker_started = False
                         task.updated_at = _now()
                         cancelled = True
                     elif not task.pending:
-                        task.worker_started = False
                         task.updated_at = _now()
                         idle = True
                     else:
@@ -288,10 +332,14 @@ class TaskManager:
                         task.updated_at = _now()
                 if cancelled:
                     self._persist()
+                    with self._lock:
+                        task.worker_started = False
                     self._send_text(task, f"任务 {task.task_id} 已取消。")
                     return
                 if idle:
                     self._persist()
+                    with self._lock:
+                        task.worker_started = False
                     return
                 self._persist()
 
@@ -300,9 +348,10 @@ class TaskManager:
                     with self._lock:
                         task.state = "cancelled"
                         task.last_reply = ""
-                        task.worker_started = False
                         task.updated_at = _now()
                     self._persist()
+                    with self._lock:
+                        task.worker_started = False
                     self._send_text(task, f"任务 {task.task_id} 已取消。")
                     return
 
@@ -330,9 +379,10 @@ class TaskManager:
             with self._lock:
                 task.state = "failed"
                 task.last_reply = f"{type(e).__name__}: {e}"
-                task.worker_started = False
                 task.updated_at = _now()
             self._persist()
+            with self._lock:
+                task.worker_started = False
             self._send_text(task, f"任务 {task.task_id} 执行失败：{type(e).__name__}: {e}")
 
     def _ask(self, task: CodeTask, instruction: str) -> tuple[str, dict]:
@@ -382,7 +432,16 @@ class TaskManager:
         return out
 
     def _send_text(self, task: CodeTask, text: str) -> None:
-        if task.event is None or not text:
+        if not text:
+            return
+        if task.event is None:
+            callback = task.notify
+            if callable(callback):
+                try:
+                    callback(text)
+                except Exception:
+                    # 窗口可能在后台任务结束前关闭；任务状态和产物仍需保留。
+                    pass
             return
         try:
             import qq_bot as QB
@@ -397,15 +456,35 @@ class TaskManager:
                 pass
 
     def _send_artifacts(self, task: CodeTask) -> None:
+        pending = []
+        for rel in task.artifacts:
+            if rel in task.sent_artifacts:
+                continue
+            path = task.root / rel
+            if path.is_file():
+                pending.append((rel, path))
+            if len(pending) >= MAX_MEDIA_SEND:
+                break
+        if not pending:
+            return
         if task.event is None:
+            callback = task.notify
+            if not callable(callback):
+                return
+            lines = [f"任务 {task.task_id} 的产物："]
+            lines.extend(f"- {rel}（{path}）" for rel, path in pending)
+            try:
+                callback("\n".join(lines))
+                task.sent_artifacts.update(rel for rel, _ in pending)
+            except Exception:
+                pass
             return
         try:
             import qq_bot as QB
             sent = 0
-            for rel in task.artifacts:
-                if rel in task.sent_artifacts or sent >= MAX_MEDIA_SEND:
-                    continue
-                path = task.root / rel
+            for rel, path in pending:
+                if sent >= MAX_MEDIA_SEND:
+                    break
                 if not path.is_file():
                     continue
                 result = QB.send_media(task.event, path)
@@ -446,7 +525,7 @@ def _task_system(task: CodeTask) -> str:
 你正在替主人执行一个真实的本地代码任务，任务编号是 `{task.task_id}`。
 工作根目录是：`{task.root}`。所有代码、输入副本和输出产物都放在这个目录内，
 不要写入仓库、用户主目录或任务目录之外。需要查看或保存文件时使用 fs_list、
-fs_read、fs_write、fs_mkdir；QQ 附件需要长期留在任务目录时使用 keep_image；
+fs_read、fs_write、fs_mkdir；对话附件需要长期留在任务目录时使用 keep_image；
 需要运行代码时使用 run_python。run_python 的 stdout、
 stderr 和文件变化是真实结果，必须根据它们继续修复和验证，不能凭空说“已经成功”。
 

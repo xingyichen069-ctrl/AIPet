@@ -218,6 +218,10 @@ def build_system(query: str, level: str | None = None) -> tuple[str, dict]:
     """
     r = T.apply_to_memory(level, query)      # 这一步让 memory 用上当前档位的预算
     body = T.system_block(query, r["level"]) + "\n\n" + M.build_context(query)
+    body += ("\n\n## 产物任务\n"
+             "当用户明确要求你实际写程序、运行代码、生成图片、报告或文件，"
+             "或者要求反复调试一个可交付结果时，调用 code_task 交给后台执行；"
+             "普通问答、解释代码和闲聊不要调用。任务会回到当前对话并保留产物路径。")
     from companion import Store, task_description
     if (M.ROOT / "data" / "companion.sqlite3").exists():
         agreements = Store(M.ROOT).tasks()

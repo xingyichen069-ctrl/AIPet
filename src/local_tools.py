@@ -44,8 +44,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import memory as M  # noqa: E402
 
-# 工具调用可能同时来自桌宠、QQ 普通对话和后台代码任务。
-# 用 contextvar 传递任务根目录和 QQ 身份，避免用一个全局变量串错会话。
+# 工具调用可能同时来自桌宠、本地聊天窗口、QQ 普通对话和后台代码任务。
+# 用 contextvar 传递任务根目录和身份，避免用一个全局变量串错会话。
 _TOOL_CONTEXT = contextvars.ContextVar("aipet_tool_context", default={})
 
 
@@ -528,17 +528,23 @@ def run_python(code: str, timeout: int = 120) -> str:
 
 def code_task(action: str = "start", instruction: str = "",
               task_id: str = "") -> str:
-    """创建或控制一个后台本地代码任务；只允许 QQ 主人上下文调用。"""
+    """创建或控制一个后台本地代码任务；只允许可信主人上下文调用。"""
     ctx = tool_context()
-    if not ctx.get("is_owner") or ctx.get("event") is None:
-        return "当前对话没有可用的 QQ 主人任务上下文。"
+    trusted_local = ctx.get("source") == "local" and bool(ctx.get("is_owner"))
+    trusted_qq = ctx.get("source") == "qq" and bool(ctx.get("is_owner")) \
+        and ctx.get("event") is not None
+    if not (trusted_local or trusted_qq):
+        return "当前对话没有可用的可信主人任务上下文。"
     try:
         from code_tasks import manager
         tm = manager()
         action = (action or "start").strip().lower()
         if action in {"start", "new", "create"}:
             if not str(instruction or "").strip():
-                instruction = str(getattr(ctx.get("event"), "content", "") or "")
+                event = ctx.get("event")
+                instruction = str(getattr(event, "content", "") or "")
+                if not instruction:
+                    instruction = str(ctx.get("query") or "")
             return tm.submit(ctx, instruction)
         if action in {"continue", "resume", "next"}:
             return tm.continue_task(ctx, instruction, task_id)
@@ -674,7 +680,7 @@ SPECS = [
                 "把明确要求写程序、运行代码、生成图片/报告/文件或反复调试的工作"
                 "交给后台本地代码任务。只在用户确实要一个可交付产物时调用；"
                 "普通问答、解释代码或闲聊不要调用。任务会在独立目录里运行，"
-                "完成后主动回到 QQ。action=start 创建新任务，continue 继续最近任务，"
+                "完成后主动回到当前本地窗口或 QQ 会话。action=start 创建新任务，continue 继续最近任务，"
                 "status 查询状态，cancel 取消任务。",
             "parameters": {
                 "type": "object",
@@ -960,7 +966,7 @@ def selftest(only: str | None = None) -> int:
         if only and name != only:
             continue
         if name in ("code_task", "run_python"):
-            print(f"  — {name:<12} 需要 QQ 主人代码任务上下文，跳过离线自测")
+            print(f"  — {name:<12} 需要可信主人代码任务上下文，跳过离线自测")
             continue
         try:
             out = fn({"query": "测试"} if name in ("web_search", "recall") else {})

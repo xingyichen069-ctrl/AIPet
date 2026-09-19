@@ -305,6 +305,11 @@ class BrainWorker(QThread):
         super().__init__()
         self.query, self.history = query, history
         self.level_override = level_override
+        # ChatWindow fills in the session-specific key and a Qt signal callback.
+        # Keeping this on the worker preserves compatibility with test workers and
+        # lets the same brain context work for the desktop window and QQ bridge.
+        self.task_context = {}
+        self.task_callback = None
 
     def run(self):
         if not HAS_BRAIN:
@@ -312,11 +317,28 @@ class BrainWorker(QThread):
             return
         token = M.ACTIVE_MESSAGE.set(getattr(self, "memory_message_id", None))
         try:
-            for kind, val in BRAIN.stream(self.query, self.history, self.level_override, cancelled=self.isInterruptionRequested):
-                if kind == "level":
-                    self.level.emit(val)
-                elif kind in ("content", "reasoning", "error", "tool"):
-                    self.chunk.emit(kind, val)
+            import local_tools as LT
+            context = {
+                "source": "local",
+                "event": None,
+                "query": self.query,
+                "conversation_key": "local:desktop",
+                "actor_id": "local",
+                "actor_name": "本地窗口",
+                "is_owner": True,
+            }
+            context.update(dict(getattr(self, "task_context", {}) or {}))
+            callback = getattr(self, "task_callback", None)
+            if callback and not context.get("task_notify"):
+                context["task_notify"] = callback
+            with LT.bind_context(**context):
+                for kind, val in BRAIN.stream(self.query, self.history,
+                                              self.level_override,
+                                              cancelled=self.isInterruptionRequested):
+                    if kind == "level":
+                        self.level.emit(val)
+                    elif kind in ("content", "reasoning", "error", "tool"):
+                        self.chunk.emit(kind, val)
         except Exception as e:
             self.chunk.emit("error", f"{type(e).__name__}: {e}")
         finally:

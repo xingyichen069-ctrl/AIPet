@@ -320,6 +320,9 @@ class Composer(QPlainTextEdit):
 
 
 class ChatWindow(QWidget):
+    # 后台代码任务在独立线程运行；用 Qt signal 把进度安全地送回界面线程。
+    task_update = Signal(str, str)  # (本地会话 id, 文本)
+
     def __init__(self, pet, worker_cls):
         super().__init__()
         self.pet, self.worker_cls = pet, worker_cls
@@ -339,6 +342,7 @@ class ChatWindow(QWidget):
         self._save_timer.setInterval(250)
         self._save_timer.timeout.connect(self._flush_ui)
         self.worker = None
+        self.task_update.connect(self.on_task_update)
         self.attachment = None
         self.cur_reply = []
         self.cur_bubble = None
@@ -871,10 +875,37 @@ class ChatWindow(QWidget):
         self.emblem.start_waiting()
         self.pet.companion.activity('thinking')
         self.worker = self.worker_cls(query, history)
+        session = str(self._draft_session)
+        self.worker.task_context = {
+            'source': 'local',
+            'event': None,
+            'query': query,
+            'conversation_key': 'local:' + session,
+            'actor_id': 'local',
+            'actor_name': '本地窗口',
+            'is_owner': True,
+        }
+        # The callback is kept on the task so a result can arrive after the
+        # initial BrainWorker has finished. Qt queues the signal to this window.
+        self.worker.task_callback = lambda text, sid=session: self.task_update.emit(sid, text)
         self.worker.memory_message_id = "__ephemeral__" if self.ephemeral else self.current_id
         self.worker.chunk.connect(self.on_chunk)
         self.worker.finished.connect(self.on_done)
         self.worker.start()
+
+    @Slot(str, str)
+    def on_task_update(self, session, text):
+        text = (text or '').strip()
+        if not text:
+            return
+        current = str(self._draft_session)
+        label = text if session == current else '后台任务（原话题）\n' + text
+        self.add_bubble(label)
+        try:
+            self.store.add_message('assistant', text, status='complete', session=session)
+        except (ValueError, OSError):
+            pass
+        self._flush_ui()
 
     def on_chunk(self, kind, text):
         if self.stopping:
