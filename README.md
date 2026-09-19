@@ -4,7 +4,7 @@
 
 完全本地运行，不依赖任何外部服务常驻。她需要一个「大脑」—— 任何 OpenAI 兼容的对话 API 都行，默认接 DeepSeek。
 
-当前版本 `0.5.0` ｜ [更新日志](CHANGELOG.md) ｜ [文档](#文档)
+当前版本 `0.5.0-beta.1` ｜ [更新日志](CHANGELOG.md) ｜ [文档](#文档)
 
 ---
 
@@ -39,11 +39,11 @@ macOS 直接双击 `启动桌宠.command`。
 
 ## 关于人格
 
-仓库里**不含人格文件**。`persona/SOUL.md`、`BOUNDARIES.md`、`PROFILE.md` 要你自己写。
+仓库提供一组公开的默认人格模板，首次启动时会复制到本机 `persona/characters/`。本地人格、头像和记忆仍然只保存在你的电脑上，不会进入仓库。
 
-这是有意的：人格是私人的东西，别人的 SOUL.md 对你没有意义。仓库提供的是位置和读取它的代码。
+在桌宠右键菜单或对话窗口的「···」菜单打开「人格管理」，可以切换、编辑和新建人格，也可以导入自己的 `SOUL.md` 与头像。直接编辑本机人格文件同样会在下一次对话读取；旧版只有 `persona/SOUL.md` 的安装会自动保留为「桃濑日和」。
 
-直接编辑 `persona/SOUL.md`，中文写，保存即生效，不用重启。
+人格管理的数据说明见 [`docs_人格管理.md`](docs_人格管理.md)。
 
 ## 配置
 
@@ -148,7 +148,8 @@ AIPet/
 │   ├── update.py           检查更新
 │   ├── mcp_server.py       MCP server
 │   └── ...
-├── persona/                人格（不在仓库，自己建）
+├── persona_defaults/       公开默认人格模板
+├── persona/                本地人格、头像和当前选择（不提交）
 ├── memory/                 记忆库（不在仓库）
 ├── data/
 │   ├── config.example.json 配置模板，首次运行会复制成 config.json

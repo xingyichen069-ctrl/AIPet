@@ -933,6 +933,7 @@ class PetWindow(QWidget):
             self.gl.clicked.connect(self._on_model_clicked)
             self.gl.drag_finished.connect(self._on_dragged)
             self.gl.hovered.connect(self._on_model_hover)
+            self.gl.reload_finished.connect(self._on_reload_finished)
             # 启动后把当前档位的表情应用上
             QTimer.singleShot(1200, lambda: self._sync_model_pose())
 
@@ -1219,6 +1220,7 @@ class PetWindow(QWidget):
             m.addAction("安静陪伴半小时", self._start_company)
         m.addSeparator()
         m.addAction("打开记忆面板", self._open_memory_view)
+        m.addAction("人格管理", self._open_persona_manager)
 
         # ── QQ ──────────────────────────────────────────────
         # 状态从 data/qq_status.json 读。QQ 桥是**独立进程**，
@@ -1382,12 +1384,22 @@ class PetWindow(QWidget):
         if self.gl is None:
             self.show_bubble("当前是静态图模式。")
             return
-        try:
-            self.gl.model.LoadModelJson(str(M.ROOT / L2D_CFG["model"]))
-            self.gl.play_idle()
+        if not self.gl.request_reload(M.ROOT / L2D_CFG["model"]):
+            self.show_bubble("模型还没准备好。")
+            return
+        self.show_bubble("正在换模型…", 1800)
+
+    def _on_reload_finished(self, success: bool, message: str):
+        if success:
             self.show_bubble("换好了。")
-        except Exception as e:                       # noqa: BLE001
-            self.show_bubble(f"换模型失败：{e}")
+        else:
+            self.show_bubble(f"换模型失败：{message}")
+
+    def _open_persona_manager(self):
+        from persona_ui import open_persona_manager
+        open_persona_manager(self)
+        if self.chat:
+            self.chat.refresh_head()
 
     def _open_config(self):
         import os

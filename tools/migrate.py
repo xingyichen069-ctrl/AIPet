@@ -72,6 +72,8 @@ if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("
 # (源里的通配, 类别, 一句说明)
 ITEMS: list[tuple[str, str, str]] = [
     ("persona/*.md",              "人格",   "SOUL / BOUNDARIES / PROFILE —— 她是谁"),
+    ("persona/characters/**/*",   "人格",   "人格库、头像和本地人格副本"),
+    ("persona/active.json",       "人格",   "当前人格选择"),
     # ★ 必须写 **/*，不能只写 **。pathlib 的 "memory/**" 只吐目录，
     #   一个文件都不给，"记忆会搬" 那条会静默地什么都不搬。
     ("memory/**/*",               "记忆",   "时间线、人物卡、压缩归档"),
@@ -96,7 +98,7 @@ ITEMS: list[tuple[str, str, str]] = [
 ]
 
 # 目标里出现这些，说明它不是一份干净的新装，得 --force 才动
-FOOTPRINT = ("persona/SOUL.md", "memory/journal.jsonl", "data/secrets.json")
+FOOTPRINT = ("persona/SOUL.md", "persona/active.json", "memory/journal.jsonl", "data/secrets.json")
 
 # 可以整个拷过去的运行环境。默认不搬，加 --with-runtime 才搬。
 #

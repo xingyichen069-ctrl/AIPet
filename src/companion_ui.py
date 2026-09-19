@@ -691,7 +691,12 @@ class ChatWindow(QWidget):
         if self.busy():
             return
         f = self.store.focus()
-        self.head.setText('安静陪伴中' if f else '小日和')
+        try:
+            from persona_manager import PersonaManager
+            name = PersonaManager(M.ROOT).active().get('name') or '小日和'
+        except (ImportError, OSError, ValueError, TypeError):
+            name = '小日和'
+        self.head.setText(f'{name} · 安静陪伴中' if f else name)
 
     def message_menu(self, mid, bubble, pos):
         menu = ThemeMenu(self.appearance, self)
@@ -727,6 +732,7 @@ class ChatWindow(QWidget):
         a = menu.addAction('以前的话题', self.old_topics)
         a.setEnabled(not self.busy())
         menu.addAction('查看约定', self.pet.companion.show_tasks)
+        menu.addAction('人格管理', self.pet._open_persona_manager)
         add_appearance_menu(menu, self.appearance, self.change_appearance)
         if self.store.focus():
             menu.addAction('结束陪伴', self.pet.companion.stop_focus)

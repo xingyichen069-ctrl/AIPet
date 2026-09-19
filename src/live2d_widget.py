@@ -93,6 +93,7 @@ class Live2DWidget(QOpenGLWidget):
     clicked = Signal(str)          # 命中部位名（"Head" / "Body"），没命中传空串
     drag_finished = Signal()       # 拖完窗口，让上层保存位置 / 挪气泡
     hovered = Signal(bool)         # 鼠标进入 / 离开角色实体
+    reload_finished = Signal(bool, str)  # (success, message)
 
     def __init__(self, model_json: str | Path, parent: QWidget | None = None,
                  zoom: float = 1.0, fps: int = 30,
@@ -113,6 +114,9 @@ class Live2DWidget(QOpenGLWidget):
         self._hovering = False
         self._quiet = False
         self._activity = "idle"
+        self._reload_requested = False
+        self._reload_path = self.model_json
+        self._reloading = False
         self._normal_interval = max(16, int(1000 / max(1, fps)))
 
         self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -131,19 +135,23 @@ class Live2DWidget(QOpenGLWidget):
             return
         try:
             live2d.glInit()
-            self.model = live2d.LAppModel()
-            self.model.LoadModelJson(self.model_json)
-            self.model.SetAutoBlinkEnable(self._auto_blink)
-            self.model.SetAutoBreathEnable(self._auto_breath)
-            if abs(self.zoom - 1.0) > 1e-6:
-                self.model.SetScale(self.zoom)
-
-            self._ready = True
+            self.model = self._load_model(self.model_json)
+            self._ready = self.model is not None
             self._timer.start()
             QTimer.singleShot(200, self.play_idle)
         except Exception as e:                       # noqa: BLE001
             print(f"[live2d] 初始化失败：{e}", file=sys.stderr)
             self._ready = False
+
+    def _load_model(self, model_json: str):
+        """Create and configure a model. Must run while this widget owns the GL context."""
+        model = live2d.LAppModel()
+        model.LoadModelJson(str(model_json))
+        model.SetAutoBlinkEnable(self._auto_blink)
+        model.SetAutoBreathEnable(self._auto_breath)
+        if abs(self.zoom - 1.0) > 1e-6:
+            model.SetScale(self.zoom)
+        return model
 
     def resizeGL(self, w: int, h: int):
         # Resize 只在这里调 —— 这时才是真实尺寸
@@ -154,6 +162,8 @@ class Live2DWidget(QOpenGLWidget):
                 print(f"[live2d] resize 失败：{e}", file=sys.stderr)
 
     def paintGL(self):
+        if self._reload_requested and not self._reloading:
+            self._reload_in_context()
         if not self._ready or self.model is None:
             return
         try:
@@ -164,6 +174,42 @@ class Live2DWidget(QOpenGLWidget):
             self.model.Draw()
         except Exception as e:                       # noqa: BLE001
             print(f"[live2d] 绘制失败：{e}", file=sys.stderr)
+
+    def request_reload(self, model_json: str | Path | None = None) -> bool:
+        """Queue a model reload for the next paint pass.
+
+        Live2D model loading touches OpenGL resources, so callers must never invoke
+        ``LoadModelJson`` directly from a menu or worker callback.
+        """
+        if not HAS_LIVE2D or not self._ready:
+            return False
+        if model_json is not None:
+            self._reload_path = str(model_json)
+        self._reload_requested = True
+        self.update()
+        return True
+
+    def _reload_in_context(self):
+        self._reload_requested = False
+        self._reloading = True
+        old_model = self.model
+        try:
+            new_model = self._load_model(self._reload_path)
+            self.model = new_model
+            self.model.Resize(max(1, self.width()), max(1, self.height()))
+            self.model_json = self._reload_path
+            self._ready = True
+            self.reload_finished.emit(True, self.model_json)
+            QTimer.singleShot(0, self.play_idle)
+        except Exception as e:                       # noqa: BLE001
+            # Keep the old model alive when a replacement is invalid.
+            self.model = old_model
+            self._ready = old_model is not None
+            message = str(e)
+            print(f"[live2d] 重载失败：{message}", file=sys.stderr)
+            self.reload_finished.emit(False, message)
+        finally:
+            self._reloading = False
 
     # ---------------------------------------------------------- 交互
 

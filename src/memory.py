@@ -545,22 +545,17 @@ def retrieve(query: str, query_tags: list[str] | None = None,
 # ---------------------------------------------------------------- prompt 组装
 
 def persona_text(include: tuple[str, ...] = ("SOUL.md", "BOUNDARIES.md")) -> str:
-    """
-    读人格文件，**剥掉给用户看的编辑说明**。
-
-    这是共用入口 —— 桌宠（brain.py）和 MCP（mcp_server.py）都走它。
-    之前剥离逻辑只写在 brain.py 里，结果 MCP 那条路把
-    "这是你最该动手改的文件"原样喂给了 QQ 上的小日和，
-    害她以为自己是份待编辑的文档。
-
-    同一个文件，你看到的是说明书，她看到的是自己。
-
-    注意 HTML 注释里不能再出现注释结束标记，否则会提前闭合 ——
-    SOUL.md 的说明里已经写了这条。
-    """
+    """读取当前人格；人格库不可用时回退到旧版 persona/ 文件。"""
     parts = []
+    persona_files = None
+    try:
+        from persona_manager import PersonaManager
+        persona_files = PersonaManager(ROOT).active_files()
+    except (ImportError, OSError, ValueError, TypeError):
+        persona_files = None
     for f in include:
-        p = ROOT / "persona" / f
+        p = (persona_files or {}).get(f) if persona_files else None
+        p = Path(p) if p else ROOT / "persona" / f
         if not p.exists():
             continue
         t = p.read_text(encoding="utf-8")
