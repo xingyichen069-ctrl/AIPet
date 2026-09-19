@@ -273,7 +273,9 @@ class Live2DWidget(QOpenGLWidget):
         try:
             img = self.grabFramebuffer()
             if img.isNull():
-                return 255                      # 取不到就当成不透明，别把功能弄没
+                # 取不到帧缓冲时不能把整块 OpenGL 画布当成角色。
+                # 这里宁可暂时不响应，也不能让透明区域继续误触。
+                return 0
             dpr = img.width() / max(1, self.width())
             x = int(px * dpr)
             y = int(py * dpr)
@@ -281,7 +283,9 @@ class Live2DWidget(QOpenGLWidget):
                 return 0
             return img.pixelColor(x, y).alpha()
         except Exception:                        # noqa: BLE001
-            return 255
+            # OpenGL 上下文短暂不可用（例如窗口刚显示或正在重载模型）
+            # 时，同样按透明处理，避免把整块窗口误判成身体。
+            return 0
 
     def _model_hit_at(self, px: float, py: float) -> bool:
         """Return whether an actually rendered character pixel is under the point."""
