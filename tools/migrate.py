@@ -50,7 +50,10 @@ migrate.py —— 换新装的时候，把私人内容搬过去
 from __future__ import annotations
 
 import argparse
+import os
+import re
 import shutil
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -306,6 +309,20 @@ def selftest() -> int:
         # 再跑一次：这次目标已经有私人内容了
         check_("目标再次迁移时会被认出「不干净」", footprint(new) != [])
 
+        # 快捷方式匹配不能光判子串 —— 旧目录名常常是新目录名的前缀
+        #   注意整串一起编码 —— 先 encode 路径再拼 ASCII 字节的话，
+        #   解码时会把尾巴当成 UTF-16 配对读成乱码，测的就不是这回事了。
+        lnk = new / "_假快捷方式.lnk"
+        lnk.write_bytes((str(new) + "-0.5.0\\pythonw.exe").encode("utf-16-le"))
+        check_("★ 快捷方式认路径边界，不把新目录误报成旧目录",
+              not _lnk_points_to(lnk, str(new)))
+        check_("真指着旧目录的快捷方式还是认得出",
+              _lnk_points_to(lnk, str(new) + "-0.5.0"))
+
+        # 停旧桥那条路：死 PID 不许动手
+        (old / "data" / "qq.pid").write_text("999999", encoding="utf-8")
+        check_("★ 旧装 qq.pid 是个死 PID 时不去杀", old_bridge_pid(old) == 0)
+
         # ── 运行环境（要 --with-runtime 才搬）──
         (old / "runtime").mkdir()
         (old / "runtime" / "python.exe").write_bytes(b"MZ")
@@ -346,12 +363,15 @@ def _lnk_points_to(link: Path, needle: str) -> bool:
         raw = link.read_bytes()
     except OSError:
         return False
-    want = needle.lower()
+    # ★ 不能光判子串。旧目录 D:\CXY\AIPet 是新目录 D:\CXY\AIPet-0.5.0\...
+    #   的前缀 —— 纯子串匹配会把已经改好的快捷方式又报成"指着旧目录"，
+    #   整改完还一直nag，人就不信这条警告了。要求后面是路径分隔符或到头。
+    want = re.escape(needle.lower()) + r"(?![-A-Za-z0-9_.])"
     for enc in ("utf-16-le", "latin-1"):
         try:
-            if want in raw.decode(enc, "ignore").lower():
+            if re.search(want, raw.decode(enc, "ignore").lower()):
                 return True
-        except (UnicodeError, LookupError):
+        except (UnicodeError, LookupError, re.error):
             continue
     return False
 
@@ -397,7 +417,6 @@ def _startup_hint(old: Path) -> list[str]:
     ★ 一开始只扫了 Startup，桌面那个 小日和.lnk 就漏了 —— 而桌面上那个
       才是他每天双击的。两个地方都扫，路径都从环境变量取，取不到就算。
     """
-    import os
     home = os.environ.get("USERPROFILE")
     appdata = os.environ.get("APPDATA")
     dirs = []
@@ -416,6 +435,60 @@ def _startup_hint(old: Path) -> list[str]:
     return out
 
 
+def _ps(script: str, **env_extra: str) -> str:
+    """跑一段 PowerShell，返回 stdout。失败一律当空串 —— 这是辅助，不是主流程。"""
+    env = dict(os.environ)
+    env.update(env_extra)
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive",
+                            "-Command", script],
+                           capture_output=True, text=True, timeout=25, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return (r.stdout or "").strip()
+
+
+def _pid_cmdline(pid: int) -> str:
+    return _ps('$p = Get-CimInstance Win32_Process -Filter "ProcessId=$env:AIPET_PID" '
+               '-ErrorAction SilentlyContinue; if ($p) { $p.CommandLine }',
+               AIPET_PID=str(pid))
+
+
+def _kill_pid(pid: int) -> bool:
+    out = _ps('Stop-Process -Id $env:AIPET_PID -Force -ErrorAction SilentlyContinue; '
+              'if (Get-CimInstance Win32_Process -Filter "ProcessId=$env:AIPET_PID" '
+              '-ErrorAction SilentlyContinue) { "no" } else { "yes" }',
+              AIPET_PID=str(pid))
+    return out.strip().endswith("yes")
+
+
+def old_bridge_pid(source: Path) -> int:
+    """
+    旧装的 QQ 桥还活着吗。活着返回 PID，否则 0。
+
+    ★ 为什么迁移脚本要管这个：同一个 bot app 只允许一个网关连接。
+      桥是 DETACHED_PROCESS 起的，不挂在任何窗口下面 —— 你关掉桌宠、
+      关掉控制台，它都还在跑。于是换完装、新桥一起来，两个网关同时挂在
+      同一个 bot 上：事件随机分给其中一个，表现是"有时回有时不回"，
+      严重的时候群里收到两条不同的回复。实测过一次。
+      这个症状很难往"旧进程还活着"这个方向想，所以让脚本自己收尾。
+
+    ★ 必须核对命令行，不能照着 pid 文件直接杀。PID 会被系统回收 ——
+      旧装那个 qq.pid 是几星期前写的，数字很可能已经分给了新装的桥，
+      照着文件 kill 就是把自己刚起的那条弄死。
+    """
+    try:
+        pid = int((source / "data" / "qq.pid").read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return 0
+    if pid <= 0 or pid == os.getpid():
+        return 0
+    cmd = _pid_cmdline(pid)
+    if not cmd or str(source).lower() not in cmd.lower():
+        return 0
+    return pid
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
         description="把旧装里的私人内容搬到新装（人格、记忆、密钥、信道、配置）",
@@ -428,6 +501,8 @@ def main() -> None:
     ap.add_argument("--no-backups", action="store_true", help="不搬 backups/ 里的历史备份包")
     ap.add_argument("--with-runtime", action="store_true",
                     help="连运行环境（runtime/ .venv/）一起拷。同机换装用，省一次 300 MB 下载")
+    ap.add_argument("--keep-old", action="store_true",
+                    help="不碰旧装里还在跑的 QQ 桥（默认会先停掉，免得两个网关抢同一条消息）")
     args = ap.parse_args()
 
     if args.source == "selftest":
@@ -534,6 +609,12 @@ def main() -> None:
     for path, why_not in SKIP:
         print(f"    {path:<38} {why_not}")
 
+    bridge = 0 if args.keep_old else old_bridge_pid(source)
+    if bridge:
+        print(f"\n  ★ 旧装的 QQ 桥还在跑（PID {bridge}）。")
+        print("    桥是脱离进程组的，关窗口关不掉它。同一个 bot 挂两个网关会各回一条，")
+        print("    所以开搬之前会先把它停掉。不想停就加 --keep-old。")
+
     links = _startup_hint(source)
     if links:
         print(f"\n  ★ 桌面和开机自启里还有快捷方式，它们可能指着旧目录 {source}：")
@@ -562,6 +643,19 @@ def main() -> None:
             print("  算了，什么都没动。\n")
             sys.exit(0)
 
+    # ★ 先停桥，再拷文件。反过来的话旧桥可能在拷的过程中往 journal.jsonl
+    #   追一条记忆，拷到一半的文件就是断的。
+    if bridge:
+        if _kill_pid(bridge):
+            print(f"\n  旧装的 QQ 桥停了（PID {bridge}）。")
+            try:
+                (source / "data" / "qq.pid").unlink()
+            except OSError:
+                pass
+        else:
+            print(f"\n  ★ 旧装的 QQ 桥（PID {bridge}）没停掉，自己看一眼：")
+            print("    任务管理器里找 pythonw.exe，或者回旧目录双击 停止QQ.bat。")
+
     copied, over, backup_dir = apply(rows, target)
     print(f"\n  搬了 {copied} 个，覆盖 {over} 个。")
     if backup_dir:
@@ -574,11 +668,17 @@ def main() -> None:
         copy_runtime(rt)
         print("  运行环境拷完了。")
 
+    steps = ["在新目录跑一次 准备环境.bat（运行环境没搬）" if not rt
+             else "直接启动桌宠试试"]
+    steps.append("确认 data\\secrets.json 在，再启动桌宠")
+    if bridge:
+        steps.append("在新目录双击 启动QQ.bat —— 旧的那条刚被停掉，QQ 现在没接上")
+    steps.append("旧目录先别删，跑顺了再删")
+
     print("\n  接下来：")
-    print("    1. 直接启动桌宠试试" if rt else
-          "    1. 在新目录跑一次 准备环境.bat（运行环境没搬）")
-    print("    2. 确认 data\\secrets.json 在，再启动桌宠")
-    print("    3. 旧目录先别删，跑顺了再删\n")
+    for i, s in enumerate(steps, 1):
+        print(f"    {i}. {s}")
+    print()
 
 
 if __name__ == "__main__":
