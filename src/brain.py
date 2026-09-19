@@ -505,7 +505,8 @@ def ask_with_system(query: str, system: str,
                     history: list[dict] | None = None,
                     level: str | None = None,
                     max_tokens: int | None = None,
-                    block_tools: set[str] | None = None) -> tuple[str, str, dict]:
+                    block_tools: set[str] | None = None,
+                    cancelled=None) -> tuple[str, str, dict]:
     """
     自带 system 地问一次。返回 (正文, 思维链, 档位信息)。
 
@@ -519,7 +520,7 @@ def ask_with_system(query: str, system: str,
 
     for kind, val in stream(query, history, level,
                             system=system, max_tokens=max_tokens,
-                            block_tools=block_tools):
+                            block_tools=block_tools, cancelled=cancelled):
         if kind == "content":
             text.append(val)
         elif kind == "reasoning":

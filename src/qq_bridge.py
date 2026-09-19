@@ -53,6 +53,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import memory as M  # noqa: E402
+import local_tools as LT  # noqa: E402
 import people as P  # noqa: E402
 import qq_bot as QB  # noqa: E402
 import qq_text as QT  # noqa: E402
@@ -283,6 +284,14 @@ def build_prompt(ev: QB.QQEvent, who: dict) -> str:
     else:
         lines += ["", "★ 这是私聊，只有他看得到。可以放松一点。",
                   f"★ 回复仍然要短，QQ 限 {REPLY_CHARS_HINT} 中文字以内。"]
+
+    if who.get("is_owner"):
+        lines += [
+            "",
+            "★ 如果主人明确要你写程序、运行代码、生成图片/报告/文件或反复调试，"
+            "调用 code_task 把它交给后台本地代码任务；不要在这条普通回复里假装已经做完。"
+            "普通问答和解释不需要调用。",
+        ]
 
     parts.append("\n".join(lines))
     return "\n".join(parts)
@@ -720,15 +729,22 @@ class Bridge:
 
         prompt = build_prompt(ev, who)
         try:
-            # ★ 非主人不给 see_image。那个工具会把整个文件 base64 之后
-            #   发到 vision.py 配的那个服务（可能是外部的），群里任何人
-            #   都不该有这个口子 —— 一句"看看 D:\某文件.png"就够把东西送出去。
+            # ★ see_image 会把整个文件 base64 之后发到 vision.py 配的那个服务
+            #   （可能是外部的），群里任何人都不该有这个口子 —— 一句
+            #   "看看 D:\某文件.png"就够把东西送出去。代码任务也只由认证主人发起，
+            #   run_python 则永远只在后台任务上下文里开放。
             #   主人的记忆里有这条规矩，但记忆是说服，这里是拦。
-            blocked = None if who["is_owner"] else {"see_image"}
-            reply, _reasoning, info = B.ask_with_system(
-                prompt, system,
-                level=meta["level"], max_tokens=budget,
-                block_tools=blocked)
+            blocked = {"run_python"}
+            if not who["is_owner"]:
+                blocked |= {"see_image", "code_task"}
+            with LT.bind_context(
+                    source="qq", event=ev, conversation_key=conv_key(ev),
+                    actor_id=who.get("id", ""), actor_name=who.get("name", ""),
+                    is_owner=bool(who.get("is_owner"))):
+                reply, _reasoning, info = B.ask_with_system(
+                    prompt, system,
+                    level=meta["level"], max_tokens=budget,
+                    block_tools=blocked)
         except Exception as e:
             log(f"brain 出错：{type(e).__name__}: {e}")
             return

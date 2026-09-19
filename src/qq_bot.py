@@ -44,6 +44,8 @@ userId 和 userName 就在作用域里，**从来没被用过**。
 from __future__ import annotations
 
 import json
+import hashlib
+import math
 import os
 import random
 import sys
@@ -545,6 +547,189 @@ def send_c2c(user_openid: str, content: str, msg_id: str = "",
         body["msg_id"] = msg_id
         body["msg_seq"] = msg_seq if msg_seq is not None else 1
     return _post(f"/v2/users/{user_openid}/messages", body)
+
+
+def send_active(ev: QQEvent, content: str) -> dict:
+    """主动发文字，不携带过期的 msg_id，供后台长任务回传。"""
+    clean, notes = QT.sanitize(content or "")
+    if notes:
+        log(f"主动出站清洗：{'、'.join(notes)}")
+    chunks = QT.split_messages(clean) if clean else []
+    if not chunks:
+        return {"_skipped": "清洗后没内容了"}
+    result: dict = {}
+    for chunk in chunks:
+        result = (send_group(ev.group_openid, chunk) if ev.scene == "group"
+                  else send_c2c(ev.user_openid, chunk))
+        if result.get("_error") or result.get("_http_error"):
+            return result
+    return result
+
+
+MEDIA_MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+MEDIA_HASH_PREFIX_BYTES = 10_002_432
+MEDIA_PART_DEFAULT = 5 * 1024 * 1024
+
+
+def _raw_put(url: str, data: bytes, timeout: float = 60) -> dict:
+    """把一个分片 PUT 到 QQ 预签名地址；这里不能带 QQBot 鉴权头。"""
+    req = urllib.request.Request(
+        url, data=data,
+        headers={"Content-Type": "application/octet-stream",
+                 "Content-Length": str(len(data))},
+        method="PUT")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            r.read()
+        return {"ok": True}
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8", "replace")[:300]
+        except Exception:
+            detail = ""
+        return {"_http_error": e.code, "message": detail}
+    except (urllib.error.URLError, OSError) as e:
+        return {"_error": f"分片上传失败：{e}"}
+
+
+def _file_hashes(path: Path) -> tuple[str, str, str]:
+    md5 = hashlib.md5()
+    sha1 = hashlib.sha1()
+    prefix = hashlib.md5()
+    prefix_left = MEDIA_HASH_PREFIX_BYTES
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            md5.update(chunk)
+            sha1.update(chunk)
+            if prefix_left > 0:
+                head = chunk[:prefix_left]
+                prefix.update(head)
+                prefix_left -= len(head)
+    return md5.hexdigest(), sha1.hexdigest(), prefix.hexdigest()
+
+
+def _media_type(path: Path) -> int:
+    suffix = path.suffix.lower()
+    if suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
+        return 1
+    if suffix in {".mp4", ".mov", ".webm", ".mkv"}:
+        return 2
+    if suffix in {".silk", ".mp3", ".wav", ".ogg", ".m4a"}:
+        return 3
+    return 4
+
+
+def upload_file(ev: QQEvent, source: str | Path) -> dict:
+    """按 QQ 富媒体分片流程上传本地文件，返回含 file_info 的结果。"""
+    path = Path(source).expanduser()
+    try:
+        path = path.resolve()
+        size = path.stat().st_size
+    except (OSError, RuntimeError) as e:
+        return {"_error": f"找不到产物：{e}"}
+    if not path.is_file():
+        return {"_error": "产物不是文件"}
+    if size <= 0:
+        return {"_error": "空文件不能上传"}
+    if size > MEDIA_MAX_UPLOAD_BYTES:
+        return {"_error": f"文件超过 QQ 单文件上限 {MEDIA_MAX_UPLOAD_BYTES // 1048576} MB"}
+
+    try:
+        md5, sha1, md5_10m = _file_hashes(path)
+    except OSError as e:
+        return {"_error": f"读取产物失败：{e}"}
+
+    if ev.scene == "group":
+        ident = ev.group_openid
+        scope = f"/v2/groups/{ident}"
+    else:
+        ident = ev.user_openid
+        scope = f"/v2/users/{ident}"
+    if not ident:
+        return {"_error": "消息没有 QQ 会话标识，不能上传产物"}
+
+    file_type = _media_type(path)
+    prepare = _api("POST", scope + "/upload_prepare", {
+        "file_type": file_type,
+        "file_size": str(size),
+        "file_name": path.name,
+        "md5": md5,
+        "sha1": sha1,
+        "md5_10m": md5_10m,
+    }, timeout=30)
+    if prepare.get("_http_error") or prepare.get("_error"):
+        return prepare
+
+    upload_id = str(prepare.get("upload_id") or "")
+    if not upload_id:
+        return {"_error": f"QQ 预上传没有返回 upload_id：{prepare}"}
+    try:
+        block_size = max(1, int(prepare.get("block_size") or MEDIA_PART_DEFAULT))
+    except (TypeError, ValueError):
+        block_size = MEDIA_PART_DEFAULT
+
+    parts = prepare.get("parts") or []
+    if not isinstance(parts, list) or not parts:
+        # 兼容仍返回单个 upload_url 的旧实现；新接口通常直接给 parts。
+        one = str(prepare.get("upload_url") or "")
+        if one:
+            parts = [{"part_index": i + 1, "upload_url": one}
+                     for i in range(math.ceil(size / block_size))]
+    if not parts:
+        return {"_error": f"QQ 预上传没有返回分片地址：{prepare}"}
+
+    try:
+        with path.open("rb") as f:
+            for i, part in enumerate(parts):
+                if not isinstance(part, dict):
+                    return {"_error": "QQ 分片地址格式不正确"}
+                url = str(part.get("upload_url") or part.get("presigned_url") or "")
+                if not url:
+                    return {"_error": f"第 {i + 1} 个分片没有预签名地址"}
+                index = int(part.get("part_index", i + 1))
+                chunk = f.read(block_size)
+                if not chunk:
+                    break
+                put = _raw_put(url, chunk)
+                if put.get("_error") or put.get("_http_error"):
+                    return {"_error": f"第 {index} 个分片上传失败：{put}"}
+                finish = _api("POST", scope + "/upload_part_finish", {
+                    "upload_id": upload_id,
+                    "part_index": index,
+                    "block_size": len(chunk),
+                    "md5": hashlib.md5(chunk).hexdigest(),
+                }, timeout=30)
+                if finish.get("_http_error") or finish.get("_error"):
+                    return {"_error": f"第 {index} 个分片确认失败：{finish}"}
+    except OSError as e:
+        return {"_error": f"读取分片失败：{e}"}
+
+    result = _api("POST", scope + "/files", {
+        "file_type": file_type,
+        "srv_send_msg": False,
+        "file_name": path.name,
+        "upload_id": upload_id,
+    }, timeout=30)
+    if result.get("_http_error") or result.get("_error"):
+        return result
+    if not result.get("file_info"):
+        return {"_error": f"QQ 合并上传没有返回 file_info：{result}"}
+    return result
+
+
+def send_media(ev: QQEvent, source: str | Path) -> dict:
+    """上传并主动发送一个任务产物。"""
+    uploaded = upload_file(ev, source)
+    if uploaded.get("_error") or uploaded.get("_http_error"):
+        return uploaded
+    body = {"msg_type": 7,
+            "media": {"file_info": uploaded.get("file_info", "")}}
+    path = (f"/v2/groups/{ev.group_openid}/messages" if ev.scene == "group"
+            else f"/v2/users/{ev.user_openid}/messages")
+    return _post(path, body)
 
 
 def reply(ev: QQEvent, content: str, dedupe: "Dedupe | None" = None) -> dict:

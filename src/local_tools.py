@@ -29,16 +29,40 @@ DeepSeek 的工具调用有两个坑（官方文档写的）：
 from __future__ import annotations
 
 import json
+import contextlib
+import contextvars
+import os
 import platform
 import re
 import shutil
 import subprocess
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import memory as M  # noqa: E402
+
+# 工具调用可能同时来自桌宠、QQ 普通对话和后台代码任务。
+# 用 contextvar 传递任务根目录和 QQ 身份，避免用一个全局变量串错会话。
+_TOOL_CONTEXT = contextvars.ContextVar("aipet_tool_context", default={})
+
+
+@contextlib.contextmanager
+def bind_context(**values):
+    """给本轮工具调用绑定上下文；退出后自动恢复上层上下文。"""
+    old = dict(_TOOL_CONTEXT.get() or {})
+    old.update(values)
+    token = _TOOL_CONTEXT.set(old)
+    try:
+        yield old
+    finally:
+        _TOOL_CONTEXT.reset(token)
+
+
+def tool_context() -> dict:
+    return dict(_TOOL_CONTEXT.get() or {})
 
 if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("-", "") != "utf8":
     try:
@@ -226,6 +250,14 @@ FS_WRITE_MAX = 200_000
 
 def _fs_root() -> Path:
     """沙箱根。允许被 config 覆盖，读不到就用默认值。"""
+    # 后台代码任务有自己的工作目录。它优先于全局 tools.fs_root，
+    # 这样同一时间跑多个任务时不会互相读写。
+    bound = tool_context().get("fs_root")
+    if bound:
+        try:
+            return Path(bound).expanduser().resolve()
+        except (OSError, RuntimeError):
+            pass
     p = M.ROOT / "data" / "config.json"
     try:
         r = (json.loads(p.read_text(encoding="utf-8")).get("tools") or {}).get("fs_root")
@@ -383,6 +415,143 @@ def fs_mkdir(path: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════
+#  本地代码执行
+# ═══════════════════════════════════════════════════════════════
+
+RUN_CODE_MAX = 120_000
+RUN_CODE_TIMEOUT = 180
+RUN_OUTPUT_MAX = 6_000
+
+
+def _snapshot_files(root: Path) -> dict[str, tuple[int, int]]:
+    """返回任务目录的轻量快照，供 run_python 报告实际产物。"""
+    out: dict[str, tuple[int, int]] = {}
+    if not root.is_dir():
+        return out
+    try:
+        items = root.rglob("*")
+    except OSError:
+        return out
+    for p in items:
+        try:
+            if not p.is_file() or ".aipet_runtime" in p.parts:
+                continue
+            rel = str(p.relative_to(root)).replace("\\", "/")
+            st = p.stat()
+            out[rel] = (int(st.st_size), int(st.st_mtime_ns))
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def _changed_files(before: dict, after: dict) -> list[str]:
+    return sorted(k for k, v in after.items()
+                  if before.get(k) != v)[:100]
+
+
+def run_python(code: str, timeout: int = 120) -> str:
+    """
+    在当前代码任务目录运行一段 Python，并返回真实 stdout/stderr 与产物。
+
+    这是第一阶段的执行器：只给后台代码任务使用，脚本工作目录已经绑定到
+    该任务的沙箱。不会把代码任务工具暴露给普通访客，也不会把 API key
+    自动注入子进程环境。
+    """
+    ctx = tool_context()
+    root = _fs_root()
+    if not ctx.get("task_id"):
+        return "拒绝执行：run_python 只能由后台代码任务调用。"
+    code = str(code or "")
+    if not code.strip():
+        return "没有可执行的 Python 代码。"
+    if len(code.encode("utf-8")) > RUN_CODE_MAX:
+        return f"代码超过 {RUN_CODE_MAX} 字节上限，请拆成几步。"
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        runtime = root / ".aipet_runtime"
+        runtime.mkdir(parents=True, exist_ok=True)
+        script = runtime / f"run_{uuid.uuid4().hex[:12]}.py"
+        script.write_text(code, encoding="utf-8", newline="\n")
+    except OSError as e:
+        return f"准备运行目录失败：{e}"
+
+    try:
+        before = _snapshot_files(root)
+        try:
+            limit = max(1, min(int(timeout or 120), RUN_CODE_TIMEOUT))
+        except (TypeError, ValueError):
+            limit = 120
+        env = dict(os.environ)
+        # 任务脚本需要正常的 Python/系统环境，但不应因为子进程继承环境就
+        # 看到宿主机里可能存在的 API key、密码或 token。
+        for key in list(env):
+            upper = key.upper()
+            if any(word in upper for word in
+                   ("API_KEY", "APIKEY", "SECRET", "TOKEN", "PASSWORD", "PASSWD", "PRIVATE_KEY")):
+                env.pop(key, None)
+        env["PYTHONUTF8"] = "1"
+        env.pop("PYTHONSTARTUP", None)
+        try:
+            p = subprocess.run(
+                [sys.executable, str(script)], cwd=str(root), env=env,
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=limit,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            out = (p.stdout or "")[-RUN_OUTPUT_MAX:]
+            err = (p.stderr or "")[-RUN_OUTPUT_MAX:]
+            code_line = f"退出码：{p.returncode}"
+        except subprocess.TimeoutExpired as e:
+            out = str(e.stdout or "")[-RUN_OUTPUT_MAX:]
+            err = (str(e.stderr or "") + f"\n超过 {limit} 秒，已终止")[-RUN_OUTPUT_MAX:]
+            code_line = "退出码：超时"
+        except OSError as e:
+            out, err, code_line = "", str(e), "退出码：启动失败"
+        after = _snapshot_files(root)
+        changed = _changed_files(before, after)
+        rows = [code_line]
+        if out.strip():
+            rows.append("stdout：\n" + out.strip())
+        if err.strip():
+            rows.append("stderr：\n" + err.strip())
+        if changed:
+            rows.append("任务目录中新增或修改的文件：\n" + "\n".join(f"- {x}" for x in changed))
+        else:
+            rows.append("任务目录没有发现新增或修改的文件。")
+        return "\n\n".join(rows)
+    finally:
+        try:
+            script.unlink()
+        except OSError:
+            pass
+
+
+def code_task(action: str = "start", instruction: str = "",
+              task_id: str = "") -> str:
+    """创建或控制一个后台本地代码任务；只允许 QQ 主人上下文调用。"""
+    ctx = tool_context()
+    if not ctx.get("is_owner") or ctx.get("event") is None:
+        return "当前对话没有可用的 QQ 主人任务上下文。"
+    try:
+        from code_tasks import manager
+        tm = manager()
+        action = (action or "start").strip().lower()
+        if action in {"start", "new", "create"}:
+            if not str(instruction or "").strip():
+                instruction = str(getattr(ctx.get("event"), "content", "") or "")
+            return tm.submit(ctx, instruction)
+        if action in {"continue", "resume", "next"}:
+            return tm.continue_task(ctx, instruction, task_id)
+        if action in {"status", "get"}:
+            return tm.status(ctx, task_id)
+        if action in {"cancel", "stop"}:
+            return tm.cancel(ctx, task_id)
+        return "未知任务操作。可用：start、continue、status、cancel。"
+    except Exception as e:  # noqa: BLE001
+        return f"任务调度失败：{type(e).__name__}: {e}"
+
+
+# ═══════════════════════════════════════════════════════════════
 #  看图
 # ═══════════════════════════════════════════════════════════════
 
@@ -494,6 +663,49 @@ SPECS = [
                                     "description": "返回几条，默认 5"},
                 },
                 "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "code_task",
+            "description":
+                "把明确要求写程序、运行代码、生成图片/报告/文件或反复调试的工作"
+                "交给后台本地代码任务。只在用户确实要一个可交付产物时调用；"
+                "普通问答、解释代码或闲聊不要调用。任务会在独立目录里运行，"
+                "完成后主动回到 QQ。action=start 创建新任务，continue 继续最近任务，"
+                "status 查询状态，cancel 取消任务。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": ["start", "continue", "status", "cancel"],
+                               "description": "默认 start"},
+                    "instruction": {"type": "string",
+                                    "description": "要执行或继续执行的具体要求"},
+                    "task_id": {"type": "string",
+                                "description": "可选任务编号；省略时使用当前会话最近任务"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_python",
+            "description":
+                "在当前后台代码任务的独立目录运行 Python，返回真实 stdout/stderr"
+                "和新增或修改的文件。只用于 code_task 已创建的实际产物任务，"
+                "不要在普通聊天里调用，也不要把 API key 写进代码或输出。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "要运行的 Python 代码"},
+                    "timeout": {"type": "integer", "minimum": 1, "maximum": 180,
+                                "description": "超时秒数，默认 120"},
+                },
+                "required": ["code"],
             },
         },
     },
@@ -710,6 +922,10 @@ DISPATCH = {
     "get_system": lambda a: get_system(),
     "web_search": lambda a: web_search(a.get("query", ""), a.get("kind", "text"),
                                        a.get("max_results", 5)),
+    "code_task": lambda a: code_task(a.get("action", "start"),
+                                      a.get("instruction", ""),
+                                      a.get("task_id", "")),
+    "run_python": lambda a: run_python(a.get("code", ""), a.get("timeout", 120)),
     "recall": lambda a: recall(a.get("query", ""), a.get("limit", 8)),
     "remember": lambda a: remember(a.get("text", ""), a.get("importance", 3),
                                    a.get("tags", ""), a.get("decay", "normal"),
@@ -742,6 +958,9 @@ def selftest(only: str | None = None) -> int:
     fails = 0
     for name, fn in DISPATCH.items():
         if only and name != only:
+            continue
+        if name in ("code_task", "run_python"):
+            print(f"  — {name:<12} 需要 QQ 主人代码任务上下文，跳过离线自测")
             continue
         try:
             out = fn({"query": "测试"} if name in ("web_search", "recall") else {})
