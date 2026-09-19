@@ -118,9 +118,16 @@ python src/brain.py chat              # 命令行对话
 
 当前版本号在根目录 `VERSION` —— 程序读的是它，`CHANGELOG.md` 和这份 README 里的只是给人看的。
 
-查有没有新版本：桌宠右键 → 高级 → 检查更新；或者在 QQ 上给主人发 `/版本`。
+查有没有新版本：桌宠右键 → 高级 → 检查更新；或者在 QQ 上给主人发 `/版本`。桌宠发现新版后可以直接点“下载并安装”，更新器会先备份将覆盖的公开代码文件。
 
-**它只查，不下载也不覆盖任何文件。** 有新版会给出下载页，装不装是你的事。不做自动更新是有意的 —— 覆盖安装一旦中途失败，整个装好的环境就坏了，而更新这件事并不值得冒这个风险。
+也可以在命令行更新，不需要重新 clone：
+
+```bash
+python src/update.py update --yes                 # 安装最新 tag
+python src/update.py update --branch all-round --yes  # 安装指定分支
+```
+
+更新包不会覆盖 `data/`、`persona/`、`memory/`、密钥、运行环境或自定义主题；更新前的代码备份放在 `backups/update-<时间>/`。
 
 把新版 zip 解压覆盖到旧目录**不会丢任何东西**：仓库的 zip 根本不含 `persona/` `memory/` `data/`，解压也不会删掉压缩包里没有的文件。
 
@@ -155,7 +162,7 @@ AIPet/
 │   ├── people.py           群成员档案
 │   ├── knowledge.py        本地知识库
 │   ├── tools.py            联网搜索
-│   ├── update.py           检查更新
+│   ├── update.py           检查并安装更新
 │   ├── mcp_server.py       MCP server
 │   └── ...
 ├── persona/                人格（不在仓库，自己建）

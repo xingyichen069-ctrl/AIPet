@@ -293,6 +293,23 @@ class UpdateCheck(QThread):
                             "error": f"{type(e).__name__}: {e}"})
 
 
+class UpdateInstall(QThread):
+    """在后台下载并安装源码包，避免更新时冻结桌宠界面。"""
+    done = Signal(dict)
+
+    def __init__(self, ref: str, kind: str = "tag", parent=None):
+        super().__init__(parent)
+        self.ref, self.kind = ref, kind
+
+    def run(self):
+        try:
+            import update as UP
+            self.done.emit(UP.update(self.ref, self.kind))
+        except Exception as e:
+            self.done.emit({"ok": False, "updated": False,
+                            "error": f"{type(e).__name__}: {e}"})
+
+
 class BrainWorker(QThread):
     """在后台线程里调 API，避免阻塞界面。"""
     chunk = Signal(str, str)     # (kind, text)  kind: content / reasoning / error
@@ -966,6 +983,7 @@ class PetWindow(QWidget):
         self.proxy_url: str = ""
         self.prober: ProxyProbe | None = None
         self.updater: UpdateCheck | None = None
+        self.installer: UpdateInstall | None = None
         self._restore_pos()
         self._watch_config()
         self.companion = CompanionController(self)
@@ -998,8 +1016,7 @@ class PetWindow(QWidget):
         self.show_bubble("网络走代理了。" if result else "网线直着，也行。", 2400)
 
     # ── 检查更新 ────────────────────────────────────────────────
-    # 只在手动点的时候查，平时零网络请求。查到有新版也不自己下 ——
-    # 只给版本号和下载页，更不更新是人的事（update.py 开头写了为什么）。
+    # 只在手动点的时候查，平时零网络请求。查到有新版后由用户点按钮安装。
 
     def _check_update(self):
         if self.updater and self.updater.isRunning():
@@ -1028,12 +1045,37 @@ class PetWindow(QWidget):
         box.setText(f"有新版本 {r['latest_clean']}。")
         box.setInformativeText(
             f"本机是 {r['current']}。\n\n"
-            f"这里不会替你下载或覆盖任何东西 —— 打开下载页，你自己决定。")
-        go = box.addButton("打开下载页", QMessageBox.AcceptRole)
+            f"更新器会先备份将被覆盖的公开代码文件；个人数据、密钥和运行环境不会覆盖。")
+        install = box.addButton("下载并安装", QMessageBox.AcceptRole)
+        go = box.addButton("打开下载页", QMessageBox.ActionRole)
         box.addButton("以后再说", QMessageBox.RejectRole)
         box.exec()
-        if box.clickedButton() is go:
+        if box.clickedButton() is install:
+            self._install_update(r)
+        elif box.clickedButton() is go:
             QDesktopServices.openUrl(QUrl(r["url"]))
+
+    def _install_update(self, result: dict):
+        if self.installer and self.installer.isRunning():
+            self.show_bubble("更新已经在路上了。", 1600)
+            return
+        self.show_bubble("正在下载更新。", 2200)
+        self.installer = UpdateInstall(result.get("latest", ""), "tag", self)
+        self.installer.done.connect(self.on_update_install_done)
+        self.installer.start()
+
+    def on_update_install_done(self, result: dict):
+        if not result.get("ok") or not result.get("updated"):
+            QMessageBox.warning(self, "安装更新", f"更新没有完成。\n\n{result.get('error', '没有可安装的更新。')}")
+            return
+        changed = len(result.get("changed") or [])
+        box = QMessageBox(self)
+        box.setWindowTitle("更新完成")
+        box.setText(f"已经安装 {result.get('ref', '新版本')}，更新了 {changed} 个公开文件。")
+        box.setInformativeText(
+            "请退出并重新启动桌宠使代码生效。若 QQ 桥正在运行，也请重新启动 QQ 桥。\n\n"
+            f"更新前备份：{result.get('backup') or '没有需要备份的文件'}")
+        box.exec()
 
     # ---------------------------------------------------------- 对话窗口
 
