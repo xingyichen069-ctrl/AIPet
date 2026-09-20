@@ -56,6 +56,7 @@ import memory as M  # noqa: E402
 import people as P  # noqa: E402
 import qq_bot as QB  # noqa: E402
 import qq_text as QT  # noqa: E402
+from persona_manager import PersonaManager  # noqa: E402
 
 if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("-", "") != "utf8":
     try:
@@ -158,7 +159,10 @@ def hist_for(key: str) -> list[dict]:
     ★ 隔着太久就丢掉。半小时没说话，多半已经换话题了 ——
       把陈年上下文喂回去，她会对着新问题答旧话。
     """
-    items = _hist_load().get(key) or []
+    persona_id = PersonaManager(M.ROOT).active_id()
+    # 未标记的旧记录仍保留在文件里，但不再作为当前人格的对话注入。
+    items = [item for item in (_hist_load().get(key) or [])
+             if item.get("persona_id") == persona_id]
     if not items:
         return []
     try:
@@ -182,6 +186,7 @@ def hist_append(key: str, role: str, name: str, text: str) -> None:
             "name": name,
             "text": text[:300],
             "ts": M.now_iso(),
+            "persona_id": PersonaManager(M.ROOT).active_id(),
         })
         d[key] = items[-HIST_MAX * 2:]        # 存多一点，读的时候再截
         # 顺手清掉太老的会话，别让文件无限长

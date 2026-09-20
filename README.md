@@ -4,7 +4,7 @@
 
 完全本地运行，不依赖任何外部服务常驻。她需要一个「大脑」—— 任何 OpenAI 兼容的对话 API 都行，默认接 DeepSeek。
 
-当前版本 `0.5.0-beta.3` ｜ [更新日志](CHANGELOG.md) ｜ [文档](#文档)
+当前版本 `0.5.0-beta.4` ｜ [更新日志](CHANGELOG.md) ｜ [文档](#文档)
 
 ---
 
@@ -58,6 +58,20 @@ python src/brain.py setkey sk-xxxx    # 配置 key，会立刻验证
 python src/brain.py check             # 验证连通性
 python src/brain.py chat              # 命令行对话
 ```
+
+也可以在本机 `data/secrets.json` 中配置其它兼容服务。当前配置会优先使用
+`anthropic_auth_token`、`anthropic_base_url` 和 `anthropic_model`；没有这些字段时
+才回退到旧的 `deepseek_*` 配置：
+
+```json
+{
+  "anthropic_auth_token": "你的 token",
+  "anthropic_base_url": "https://你的服务",
+  "anthropic_model": "deepseek-flash"
+}
+```
+
+密钥文件只保存在本机，已被 Git 忽略。切换模型后重启桌宠或 QQ 桥接即可。
 
 默认连 DeepSeek 官方。换别家改 `data/secrets.json`：
 

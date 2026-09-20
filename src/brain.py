@@ -15,15 +15,15 @@ brain.py —— 独立大脑（插槽 B）
 ═══════════════════════════════════════════════════════════════
 
 只要对方是 **OpenAI 兼容的 `/chat/completions`**，就能当脑子用。
-默认连 DeepSeek，换别家只要改 endpoint 和模型名：
+默认连 DeepSeek，也支持学校的兼容接口：
 
     data/secrets.json
     {
-      "deepseek_api_key":  "你的 key",
-      "deepseek_base_url": "https://你的服务/v1"    ← 不填就走 DeepSeek 官方
+      "anthropic_auth_token": "你的 token",
+      "anthropic_base_url": "https://你的服务"
     }
 
-（键名里的 "deepseek" 是历史包袱，改掉会让老配置读不出来，所以留着。）
+旧的 `deepseek_*` 键名仍然保留作为回退，避免已有安装失效。
 模型名在 data/thinking.json 的档位里改。
 
 ⚠️ 下面这两条**是 DeepSeek 特有的**，换成别家就不一定成立 ——
@@ -67,7 +67,9 @@ API key 放在 data/secrets.json：
 
     { "deepseek_api_key": "sk-xxxxxxxx" }
 
-也可以走环境变量 DEEPSEEK_API_KEY（优先级更高）。
+兼容接口可以走环境变量 `ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BASE_URL`、
+`ANTHROPIC_MODEL`；它们的优先级高于 secrets.json。旧的 `DEEPSEEK_*`
+环境变量仍然支持。
 secrets.json 不在备份范围内，这是故意的。
 
 ═══════════════════════════════════════════════════════════════
@@ -128,6 +130,7 @@ if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("
 
 SECRETS = M.ROOT / "data" / "secrets.json"
 DEFAULT_BASE = "https://api.deepseek.com"
+DEFAULT_COMPAT_MODEL = "qwen3.5"
 
 # 档位 effort → DeepSeek 实际接受的 reasoning_effort。
 # 官方映射表见文件头。medium 会被映射到 high，这里直接写清楚，
@@ -157,12 +160,17 @@ def api_model(name: str) -> str:
 
     两边的格式都接受，在这里统一。
     """
-    name = (name or "deepseek-flash").strip()
+    # thinking.json 早期版本默认写的是 DeepSeek 模型；切到兼容服务后，
+    # 若没有显式指定新模型，自动使用该服务的默认模型。
+    fallback = configured_model()
+    name = (name or fallback).strip()
     if "::" in name:
         name = name.split("::", 1)[1]
     # 旧名会被路由到 V4.1-Flash，但按官方建议用新名
     if name in ("deepseek-v4-flash", "deepseek-v4-flash-vision-exp"):
         name = "deepseek-flash"
+    if api_provider() == "compat" and name.startswith("deepseek"):
+        name = fallback
     return name
 
 
@@ -181,13 +189,44 @@ def load_secrets() -> dict:
 
 
 def api_key() -> str:
-    return os.environ.get("DEEPSEEK_API_KEY") or load_secrets().get("deepseek_api_key", "")
+    d = load_secrets()
+    if api_provider() == "compat":
+        return (os.environ.get("ANTHROPIC_AUTH_TOKEN")
+            or os.environ.get("ANTHROPIC_API_KEY")
+            or d.get("anthropic_auth_token", "")
+            or d.get("anthropic_api_key", ""))
+    return os.environ.get("DEEPSEEK_API_KEY") or d.get("deepseek_api_key", "")
 
 
 def base_url() -> str:
+    d = load_secrets()
+    if api_provider() == "compat":
+        return os.environ.get("ANTHROPIC_BASE_URL") or d.get("anthropic_base_url", "")
     return (os.environ.get("DEEPSEEK_BASE_URL")
-            or load_secrets().get("deepseek_base_url")
+            or d.get("deepseek_base_url")
             or DEFAULT_BASE)
+
+
+def api_provider() -> str:
+    """返回当前后端类别；兼容接口使用通用 OpenAI 请求格式。"""
+    d = load_secrets()
+    if (os.environ.get("ANTHROPIC_AUTH_TOKEN")
+            or os.environ.get("ANTHROPIC_API_KEY")
+            or os.environ.get("ANTHROPIC_BASE_URL")
+            or d.get("anthropic_auth_token")
+            or d.get("anthropic_api_key")
+            or d.get("anthropic_base_url")):
+        return "compat"
+    return "deepseek"
+
+
+def configured_model() -> str:
+    d = load_secrets()
+    if api_provider() == "compat":
+        return (os.environ.get("ANTHROPIC_MODEL")
+                or d.get("anthropic_model")
+                or DEFAULT_COMPAT_MODEL)
+    return "deepseek-flash"
 
 
 def save_key(key: str) -> None:
@@ -253,17 +292,22 @@ def build_payload(query: str, history: list[dict] | None = None,
         "max_tokens": p.get("max_tokens", 800),
         "stream": stream,
     }
+    r = {**r, "params": {**p, "model": payload["model"]}}
     if tools:
         payload["tools"] = tools
 
-    if effort is None:
-        # 关闭思考模式 —— 这时 temperature 才真正生效
-        payload["thinking"] = {"type": "disabled"}
-        payload["temperature"] = p.get("temperature", 0.75)
+    if api_provider() == "deepseek":
+        if effort is None:
+            # DeepSeek 的专用思考开关；其它兼容服务不一定接受这些字段。
+            payload["thinking"] = {"type": "disabled"}
+            payload["temperature"] = p.get("temperature", 0.75)
+        else:
+            payload["reasoning_effort"] = effort
+            payload["thinking"] = {"type": "enabled"}
     else:
-        # 思考模式：temperature 会被静默忽略，不传更诚实
-        payload["reasoning_effort"] = effort
-        payload["thinking"] = {"type": "enabled"}
+        # 兼容接口统一走普通 OpenAI 请求体。思考档位仍通过 system prompt、
+        # max_tokens 和记忆预算生效，避免把 DeepSeek 专用字段发给 qwen。
+        payload["temperature"] = p.get("temperature", 0.75)
 
     return payload, r
 
@@ -544,7 +588,7 @@ def check() -> bool:
         print("  或运行：python src/brain.py setkey sk-xxxx")
         return False
 
-    print(f"✓ 读到 key：{key[:8]}…{key[-4:]}（共 {len(key)} 字符）")
+    print("✓ 已读取 API key（不显示密钥）")
     print(f"  base_url：{base_url()}")
     print("  正在测试连通性…")
 

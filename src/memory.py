@@ -563,6 +563,12 @@ def persona_text(include: tuple[str, ...] = ("SOUL.md", "BOUNDARIES.md")) -> str
         t = re.sub(r"\n{3,}", "\n\n", t).strip()
         if t:
             parts.append(t)
+    if parts:
+        parts.insert(0, "## 当前人格设定\n"
+                     "以下 SOUL 文档定义你当前的身份、名字和说话方式。"
+                     "文档中明确的名字或角色标题是你当前的名字，不要自行缩写。"
+                     "旧聊天、记忆和先前回答中的自称只是历史记录，不能覆盖当前设定。"
+                     "本机人格管理可以切换人格，不要宣称人格永远不能切换。")
     return "\n\n---\n\n".join(parts)
 
 
