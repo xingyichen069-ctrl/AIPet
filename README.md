@@ -129,7 +129,7 @@ python src/update.py update --branch all-round --yes  # 安装指定分支
 
 更新包不会覆盖 `data/`、`persona/`、`memory/`、密钥、运行环境或自定义主题；更新前的代码备份放在 `backups/update-<时间>/`。
 
-需要 Windows 目录版 EXE 时，在仓库根目录运行 `python tools/package_windows.py --force`，然后双击 `dist/AIPet/AIPet.exe`。这是桌宠和本地聊天窗口的打包入口；打包目录里的 `data/`、`memory/` 和 `persona/` 仍是运行资料，请单独备份。
+需要 Windows 便携 EXE 时，在仓库根目录运行 `.venv\Scripts\python.exe tools\package_windows.py --force`，然后双击 `dist/AIPet/AIPet.exe`。打包脚本用本机 Visual Studio 编译轻量启动器，并附带独立 Python 运行时；桌宠、本地聊天、后台代码任务和源码更新仍走同一套文件。打包目录里的 `data/`、`memory/` 和 `persona/` 仍是运行资料，请单独备份。
 
 把新版 zip 解压覆盖到旧目录**不会丢任何东西**：仓库的 zip 根本不含 `persona/` `memory/` `data/`，解压也不会删掉压缩包里没有的文件。
 
