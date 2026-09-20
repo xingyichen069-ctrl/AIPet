@@ -767,8 +767,7 @@ class ChatWindow(QWidget):
         self.add_bubble('新话题开始了。以前的对话仍可在菜单中找回。', 'sys')
 
     def old_topics(self):
-        with self.store.db() as db:
-            sessions = db.execute('SELECT s.id,s.created,(SELECT text FROM messages WHERE session=s.id AND role=\'user\' AND status!=\'forgotten\' ORDER BY created LIMIT 1) AS title FROM sessions s ORDER BY created DESC LIMIT 50').fetchall()
+        sessions = self.store.sessions()
         labels = [time.strftime('%m-%d %H:%M', time.localtime(s['created'])) + '  ' + (s['title'] or '空话题')[:36] for s in sessions]
         if not labels:
             return
@@ -777,9 +776,7 @@ class ChatWindow(QWidget):
         choice, ok = QInputDialog.getItem(self, '以前的话题', '选择要继续的话题：', labels, 0, False)
         if ok:
             self._flush_ui()
-            with self.store.db() as db:
-                db.execute('UPDATE sessions SET active=0')
-                db.execute('UPDATE sessions SET active=1 WHERE id=?', (sessions[labels.index(choice)]['id'],))
+            self.store.select_session(sessions[labels.index(choice)]['id'])
             self.restore()
             self._restore_draft()
 

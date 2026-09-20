@@ -48,6 +48,19 @@ class Services(unittest.TestCase):
         self.assertEqual(self.store.history(), [])
         self.assertEqual(len(self.store.messages(old)), 2)
 
+    def test_session_listing_and_selection_stay_in_store_service(self):
+        old = self.store.session()
+        self.pair('旧话题标题', '旧话题回复')
+        self.store.session(new=True)
+        self.pair('新话题标题', '新话题回复')
+        sessions = self.store.sessions()
+        self.assertEqual([s['title'] for s in sessions[:2]],
+                         ['新话题标题', '旧话题标题'])
+        self.assertEqual(self.store.select_session(old), old)
+        self.assertEqual(self.store.session(), old)
+        with self.assertRaises(ValueError):
+            self.store.select_session('missing-session')
+
     def test_incomplete_messages_not_sent_as_success(self):
         self.store.add_message('user', '没有发完', status='pending')
         self.store.add_message('assistant', '半句', status='failed')
