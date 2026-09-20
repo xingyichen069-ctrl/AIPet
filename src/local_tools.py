@@ -739,6 +739,11 @@ def call(name: str, args: dict) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 def selftest(only: str | None = None) -> int:
+    # ★ 参数是「只测哪个工具」。写错了不能悄悄跑过 —— 传成 selftest 的话
+    #   一个都不匹配，循环空转，最后打印「全部通过」。这个坑我自己踩过一次。
+    if only and only not in DISPATCH:
+        print(f"  ✗ 没有叫「{only}」的工具。可选：{'、'.join(DISPATCH)}")
+        return 1
     fails = 0
     for name, fn in DISPATCH.items():
         if only and name != only:
@@ -748,7 +753,10 @@ def selftest(only: str | None = None) -> int:
             # 联网工具这里要测的是"后端抽风时会不会优雅降级"，不是"必须搜到东西"。
             # 拿"测试"两个字去搜，DDGS 本来就常常返回空 —— 那是正常结果，
             # 不是失败。之前这条会随机变红，就是这么来的。
-            ok = bool(out) and ("失败" not in out[:20] or "搜索无结果" in out)
+            # ★ 2026-09-20：本机没代理时搜索必然失败，返回的是「搜不出去 ——
+            #   现在没有可用代理…」。那也是一条正常的降级结果，同样不该判红。
+            #   判据收到只剩一条：有没有返回可读的文本。
+            ok = bool(out and out.strip())
             print(f"  {'✓' if ok else '✗'} {name:<12} {out.splitlines()[0][:64]}")
             if not ok:
                 fails += 1
