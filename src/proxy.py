@@ -319,6 +319,8 @@ def status() -> dict:
     env = from_environment()
     return {
         "配置值": M.CFG.get("tools", {}).get("proxy") or "(空)",
+        # 保留旧键名，外部状态面板仍读取它；新键名区分两个系统来源。
+        "系统代理": from_windows_registry() or from_macos_networksetup() or "(未开启)",
         "macOS系统代理": from_macos_networksetup() or "(未开启)",
         "Windows系统代理": from_windows_registry() or "(未开启)",
         "端口探测": from_port_scan() or "(没探到)",
