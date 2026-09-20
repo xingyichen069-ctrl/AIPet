@@ -11,6 +11,7 @@ from .core import (
     run_plugin_test,
     validate_plugin,
 )
+from .editor import DraftResult, GuidedEditor, OpenAICompatClient
 
 __all__ = [
     "HarnessError",
@@ -22,4 +23,7 @@ __all__ = [
     "run_plugin",
     "run_plugin_test",
     "validate_plugin",
+    "DraftResult",
+    "GuidedEditor",
+    "OpenAICompatClient",
 ]
