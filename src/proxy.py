@@ -37,9 +37,13 @@ proxy.py —— 代理自动检测
 from __future__ import annotations
 
 import json
+import os
+import re
+import subprocess
 import socket
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -65,6 +69,16 @@ COMMON_PORTS = [
     (8889, "http"),    # 杂项
     (8080, "http"),    # 通用
 ]
+
+# 国内站点走直连，减少代理绕行和 DNS 污染；列表可在 tools.domestic_domains
+# 中覆盖。命中规则只影响路由，不会修改系统 DNS。
+DEFAULT_DOMESTIC_DOMAINS = {
+    "baidu.com", "bdimg.com", "bilibili.com", " bilivideo.com".strip(),
+    "qq.com", "weixin.qq.com", "tencent.com", "taobao.com", "tmall.com",
+    "jd.com", "zhihu.com", "douyin.com", "kuaishou.com", "163.com",
+    "126.com", "sina.com.cn", "weibo.com", "csdn.net", "cnblogs.com",
+    "gov.cn", "edu.cn", "miit.gov.cn", "aliyun.com", "alipay.com",
+}
 
 CHECK_URL = "https://www.google.com/generate_204"
 _cache: dict = {"value": "\x00"}      # \x00 = 还没检测过
@@ -122,6 +136,41 @@ def from_windows_registry() -> str | None:
     return f"http://{server}" if "://" not in server else server
 
 
+def from_environment() -> str | None:
+    """读取常见代理环境变量，兼容大小写和 NO_PROXY。"""
+    for key in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
+                "ALL_PROXY", "all_proxy"):
+        value = (os.environ.get(key) or "").strip()
+        if value and not value.lower().startswith("http://default.mitmproxy"):
+            return value
+    return None
+
+
+def from_macos_networksetup() -> str | None:
+    """读取 macOS 当前网络服务的 Web/Secure Web Proxy。"""
+    if sys.platform != "darwin":
+        return None
+    try:
+        services = subprocess.run(["networksetup", "-listallnetworkservices"],
+                                  capture_output=True, text=True, timeout=4)
+        names = [x.strip().lstrip("*") for x in services.stdout.splitlines()[1:]
+                 if x.strip() and not x.strip().startswith("An asterisk")]
+        for service in names:
+            for kind in ("webproxy", "securewebproxy"):
+                r = subprocess.run(["networksetup", f"-get{kind}", service],
+                                   capture_output=True, text=True, timeout=4)
+                vals = {}
+                for line in r.stdout.splitlines():
+                    if ":" in line:
+                        k, v = line.split(":", 1)
+                        vals[k.strip().lower()] = v.strip()
+                if vals.get("enabled", "no").lower() == "yes" and vals.get("server"):
+                    return f"http://{vals['server']}:{vals.get('port', '8080')}"
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
 def _port_open(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.35)
@@ -147,14 +196,26 @@ def verify(url: str, timeout: float = 8.0) -> tuple[bool, str]:
     探测到 socks5 且没有 PySocks 时，会明确说出来，
     而不是含糊地报"不通"让人以为是网络问题。
     """
-    if url.startswith("socks"):
+    if url.lower().startswith("socks"):
         try:
-            import socks  # noqa: F401
+            import socks
         except ImportError:
             return False, "SOCKS 代理需要 PySocks：pip install pysocks"
 
-    opener = urllib.request.build_opener(
-        urllib.request.ProxyHandler({"http": url, "https": url}))
+    restore_socket = None
+    if url.lower().startswith("socks"):
+        import socks
+        parsed = urllib.parse.urlsplit(url)
+        ptype = socks.SOCKS5 if parsed.scheme.lower() in ("socks5", "socks5h") else socks.SOCKS4
+        socks.set_default_proxy(ptype, parsed.hostname or "127.0.0.1",
+                                parsed.port or 1080,
+                                rdns=parsed.scheme.lower() == "socks5h",
+                                username=parsed.username, password=parsed.password)
+        restore_socket = socket.socket
+        socket.socket = socks.socksocket
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    else:
+        opener = opener_for_url(CHECK_URL, url)
     req = urllib.request.Request(CHECK_URL, method="GET")
     try:
         with opener.open(req, timeout=timeout) as r:
@@ -164,6 +225,45 @@ def verify(url: str, timeout: float = 8.0) -> tuple[bool, str]:
         return True, f"HTTP {e.code}（链路可达）"
     except Exception as e:
         return False, f"{type(e).__name__}: {str(e)[:60]}"
+    finally:
+        if restore_socket is not None:
+            socket.socket = restore_socket
+
+
+def _socks_open(url: str):
+    import socks
+    parsed = urllib.parse.urlsplit(url)
+    proxy_type = socks.SOCKS5 if parsed.scheme.lower() in ("socks5", "socks5h") else socks.SOCKS4
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 1080
+    # socks5h 让代理端解析域名，降低本地 DNS 污染的影响。
+    rdns = parsed.scheme.lower() == "socks5h"
+    return socks.socksocket, (proxy_type, host, port, rdns,
+                              parsed.username, parsed.password)
+
+
+def opener_for_url(url: str, proxy: str | None = None):
+    """按域名路由请求；SOCKS 代理用 PySocks 临时接管 socket。"""
+    import urllib.parse
+    chosen = proxy if proxy is not None else proxy_for_url(url)
+    if not chosen:
+        return urllib.request.build_opener()
+    if chosen.lower().startswith("socks"):
+        try:
+            import socks
+        except ImportError:
+            return urllib.request.build_opener()
+        # urllib 没有 SOCKS handler。通过 socksocket 的默认代理配置，
+        # 在真正打开请求时由 verify/调用方负责恢复全局 socket。
+        parsed = urllib.parse.urlsplit(chosen)
+        ptype = socks.SOCKS5 if parsed.scheme.lower() in ("socks5", "socks5h") else socks.SOCKS4
+        socks.set_default_proxy(ptype, parsed.hostname or "127.0.0.1",
+                                parsed.port or 1080,
+                                rdns=parsed.scheme.lower() == "socks5h",
+                                username=parsed.username, password=parsed.password)
+        return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({"http": chosen, "https": chosen}))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -191,20 +291,17 @@ def detect(verbose: bool = False, force: bool = False) -> str | None:
         _cache["value"] = explicit if ok else None
         return _cache["value"]
 
-    cand = from_windows_registry()
-    if cand:
+    candidates = [("环境变量", from_environment()),
+                  ("macOS 系统代理", from_macos_networksetup()),
+                  ("Windows 系统代理", from_windows_registry()),
+                  ("端口探测", from_port_scan())]
+    seen = set()
+    for label, cand in candidates:
+        if not cand or cand in seen:
+            continue
+        seen.add(cand)
         ok, msg = verify(cand)
-        say(f"[proxy] 系统代理 {cand} → {'可用' if ok else '不通：' + msg}")
-        if ok:
-            _cache["value"] = cand
-            return cand
-    else:
-        say("[proxy] 系统代理未开启")
-
-    cand = from_port_scan()
-    if cand:
-        ok, msg = verify(cand)
-        say(f"[proxy] 端口探测 {cand} → {'可用' if ok else '不通：' + msg}")
+        say(f"[proxy] {label} {cand} → {'可用' if ok else '不通：' + msg}")
         if ok:
             _cache["value"] = cand
             return cand
@@ -219,16 +316,70 @@ def refresh() -> str | None:
 
 
 def status() -> dict:
-    import os
-    env = (os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
-           or os.environ.get("ALL_PROXY"))
+    env = from_environment()
     return {
         "配置值": M.CFG.get("tools", {}).get("proxy") or "(空)",
-        "系统代理": from_windows_registry() or "(未开启)",
+        "macOS系统代理": from_macos_networksetup() or "(未开启)",
+        "Windows系统代理": from_windows_registry() or "(未开启)",
         "端口探测": from_port_scan() or "(没探到)",
         "环境变量": env or "(无)",
         "最终使用": detect() or "(直连)",
     }
+
+
+def _domestic_domains() -> set[str]:
+    configured = M.CFG.get("tools", {}).get("domestic_domains")
+    if isinstance(configured, list) and configured:
+        return {str(x).lower().lstrip(".") for x in configured if str(x).strip()}
+    return DEFAULT_DOMESTIC_DOMAINS
+
+
+def is_domestic_host(host: str) -> bool:
+    host = (host or "").lower().rstrip(".")
+    if not host:
+        return False
+    return any(host == d or host.endswith("." + d) for d in _domestic_domains())
+
+
+def proxy_for_url(url: str) -> str | None:
+    """国内域名默认直连，其他域名使用已验证代理。"""
+    try:
+        host = urllib.parse.urlsplit(url).hostname or ""
+    except ValueError:
+        host = ""
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        return None
+    try:
+        import ipaddress
+        if ipaddress.ip_address(host).is_private:
+            return None
+    except ValueError:
+        pass
+    no_proxy = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
+    if any(host == x.strip().lstrip(".") or host.endswith("." + x.strip().lstrip("."))
+           for x in no_proxy.split(",") if x.strip()):
+        return None
+    cfg = M.CFG.get("tools", {})
+    if is_domestic_host(host) and not bool(cfg.get("proxy_domestic", False)):
+        return None
+    return detect()
+
+
+def dns_diagnose(host: str) -> dict:
+    """只诊断当前解析，不改系统设置。"""
+    host = (host or "").strip()
+    if not host:
+        return {"host": "", "error": "缺少域名"}
+    try:
+        rows = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+        addresses = sorted({x[4][0] for x in rows})
+    except socket.gaierror as e:
+        return {"host": host, "addresses": [], "error": str(e), "pollution_suspected": True}
+    bad = {"4.36.66.178", "8.7.198.45", "37.61.54.158", "46.82.174.68",
+           "59.24.3.173", "203.98.7.65", "243.185.187.39"}
+    return {"host": host, "addresses": addresses,
+            "domestic_route": is_domestic_host(host),
+            "pollution_suspected": bool(set(addresses) & bad)}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -291,6 +442,11 @@ def main() -> None:
         ok, msg = verify(p)
         print(f"当前：{p} → {'通' if ok else '不通'}（{msg}）")
         sys.exit(0 if ok else 1)
+
+    if args and args[0] == "dns":
+        host = args[1] if len(args) > 1 else ""
+        print(json.dumps(dns_diagnose(host), ensure_ascii=False, indent=2))
+        return
 
     print("代理检测\n")
     print(json.dumps(status(), ensure_ascii=False, indent=2))
