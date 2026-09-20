@@ -1,7 +1,7 @@
 {
   "_说明": "思考强度配置。面板上的选项和这里一一对应。改完保存，面板会自动重载。",
   "_手册": "详细调参说明见 docs/思考强度配置手册.md",
-  "current": "frugal",
+  "current": "max",
   "_current": "auto | frugal | daily | serious | deep | max",
   "auto_rules": {
     "_说明": "自动模式下按这些规则判断该用哪一档。分数从 0 起算，落在哪个区间就用哪档。",
@@ -83,9 +83,9 @@
       "params": {
         "model": "deepseek::deepseek-flash",
         "reasoning_effort": "none",
-        "max_tokens": 300,
+        "max_tokens": 3000,
         "temperature": 0.85,
-        "memory_budget": 350,
+        "memory_budget": 3500,
         "memory_entries": 3,
         "memory_floor": 2,
         "search": "off",
@@ -103,9 +103,9 @@
       "params": {
         "model": "deepseek::deepseek-flash",
         "reasoning_effort": "low",
-        "max_tokens": 800,
+        "max_tokens": 8000,
         "temperature": 0.75,
-        "memory_budget": 1200,
+        "memory_budget": 12000,
         "memory_entries": 12,
         "memory_floor": 4,
         "search": "on_demand",
@@ -123,9 +123,9 @@
       "params": {
         "model": "deepseek::deepseek-flash",
         "reasoning_effort": "medium",
-        "max_tokens": 2000,
+        "max_tokens": 20000,
         "temperature": 0.65,
-        "memory_budget": 2500,
+        "memory_budget": 25000,
         "memory_entries": 25,
         "memory_floor": 5,
         "search": "on_demand",
@@ -143,9 +143,9 @@
       "params": {
         "model": "deepseek::deepseek-flash",
         "reasoning_effort": "high",
-        "max_tokens": 4000,
+        "max_tokens": 40000,
         "temperature": 0.55,
-        "memory_budget": 5000,
+        "memory_budget": 50000,
         "memory_entries": 50,
         "memory_floor": 6,
         "search": "eager",
@@ -163,9 +163,9 @@
       "params": {
         "model": "deepseek::deepseek-flash",
         "reasoning_effort": "max",
-        "max_tokens": 8000,
+        "max_tokens": 80000,
         "temperature": 0.5,
-        "memory_budget": 9000,
+        "memory_budget": 90000,
         "memory_entries": 80,
         "memory_floor": 8,
         "search": "always",
