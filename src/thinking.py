@@ -46,6 +46,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -194,8 +195,8 @@ def apply_to_memory(level: str | None = None, query: str | None = None) -> dict:
     不写回 memory 的全局配置，避免并发请求互相污染。
     """
     r = resolve(query, level)
-    p = r["params"]
-    return {**r, "retrieval": {
+    p = deepcopy(r["params"])
+    return {**r, "params": p, "retrieval": {
         "token_budget": p["memory_budget"],
         "max_entries": p["memory_entries"],
         "recency_floor": p.get("memory_floor", 4),
@@ -221,9 +222,10 @@ _SEARCH_HINT = {
 }
 
 
-def system_block(query: str | None = None, level: str | None = None) -> str:
+def system_block(query: str | None = None, level: str | None = None,
+                 resolved: dict | None = None) -> str:
     """生成要注入 system prompt 的思考强度块。"""
-    r = resolve(query, level)
+    r = resolved or resolve(query, level)
     p = r["params"]
 
     lines = [
@@ -245,7 +247,7 @@ def system_block(query: str | None = None, level: str | None = None) -> str:
 def context(query: str, level: str | None = None) -> str:
     """思考强度块 + 记忆块，一次给全。"""
     r = apply_to_memory(level, query)
-    return system_block(query, r["level"]) + "\n\n" + M.build_context(
+    return system_block(query, resolved=r) + "\n\n" + M.build_context(
         query, retrieval=r["retrieval"])
 
 

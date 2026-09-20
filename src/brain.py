@@ -93,6 +93,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import memory as M          # noqa: E402
 import thinking as T        # noqa: E402
+import conversation_core as C  # noqa: E402
 
 try:
     import local_tools as LT
@@ -216,30 +217,18 @@ def build_system(query: str, level: str | None = None) -> tuple[str, dict]:
 
     system = 人格设定 + 思考强度指令 + 记忆（关系状态/相关回忆/用户档案）
     """
-    r = T.apply_to_memory(level, query)
-    body = T.system_block(query, r["level"]) + "\n\n" + M.build_context(
-        query, retrieval=r["retrieval"])
-    body += ("\n\n## 产物任务\n"
-             "当用户明确要求你实际写程序、运行代码、生成图片、报告或文件，"
-             "或者要求反复调试一个可交付结果时，调用 code_task 交给后台执行；"
-             "普通问答、解释代码和闲聊不要调用。任务会回到当前对话并保留产物路径。")
-    from companion import Store, task_description
-    if (M.ROOT / "data" / "companion.sqlite3").exists():
-        agreements = Store(M.ROOT).tasks()
-        if agreements:
-            body += "\n\n## 已保存的约定与陪伴\n" + "\n".join(task_description(t) for t in agreements[:20])
-    return f"{persona_text()}\n\n---\n\n{body}", r
+    options = C.snapshot_options(query, level)
+    return C.desktop_system(query, options), options
 
 
 def build_payload(query: str, history: list[dict] | None = None,
-                  level: str | None = None, stream: bool = True) -> tuple[dict, dict]:
-    system, r = build_system(query, level)
+                  level: str | None = None, stream: bool = True,
+                  system: str | None = None, max_tokens: int | None = None,
+                  options: dict | None = None, policy=None) -> tuple[dict, dict]:
+    request = C.prepare(query, history, level, system=system,
+                        max_tokens=max_tokens, options=options)
+    r = request.options
     p = r["params"]
-
-    messages = [{"role": "system", "content": system}]
-    for h in (history or [])[-16:]:          # 只带最近 12 轮，够了
-        messages.append({"role": h["role"], "content": h["content"]})
-    messages.append({"role": "user", "content": query})
 
     effort = EFFORT_MAP.get(p.get("reasoning_effort", "low"), "high")
 
@@ -254,10 +243,14 @@ def build_payload(query: str, history: list[dict] | None = None,
 
     payload = {
         "model": api_model(p.get("model", "deepseek-flash")),
-        "messages": messages,
-        "max_tokens": p.get("max_tokens", 800),
+        "messages": request.messages(),
+        "max_tokens": (request.max_tokens
+                        if request.max_tokens is not None
+                        else p.get("max_tokens", 800)),
         "stream": stream,
     }
+    if policy and tools:
+        tools = policy.visible(tools)
     if tools:
         payload["tools"] = tools
 
@@ -317,7 +310,8 @@ def stream(query: str, history: list[dict] | None = None,
            level: str | None = None, cancelled=None,
            system: str | None = None, max_tokens: int | None = None,
            block_tools: set[str] | None = None,
-           allowed_tools: set[str] | None = None):
+           allowed_tools: set[str] | None = None,
+           options: dict | None = None):
     """
     流式生成。产出 (类型, 文本)：
         ("level", 档位信息)  —— 只产一次，最先
@@ -330,24 +324,15 @@ def stream(query: str, history: list[dict] | None = None,
         yield ("error", "没有 API key。运行：python src/brain.py setkey sk-xxxx")
         return
 
-    payload, r = build_payload(query, history, level, stream=True)
-    # QQ 那条路的覆盖口：群聊要自带更短的 system，而且必须在**调用之前**
-    # 就把 max_tokens 压下来 —— 被动回复只有 5 分钟，生成完再截断时间已经花掉了。
-    if system is not None:
-        payload["messages"][0] = {"role": "system", "content": system}
-    if max_tokens is not None:
-        payload["max_tokens"] = int(max_tokens)
-
     # ★ 工具黑名单。QQ 那条路用它挡住 see_image —— 那个工具会把整个文件
     #   发到校外服务器，不能让群里的人靠一句话就把谁的文件送出去。
     #   在**调用之前**摘掉，不是调用之后拦：模型看不见这个工具，
     #   就不会写出针对它的调用，也不会因为"我明明有这个工具"而反复试。
     policy = LT.make_policy(blocked_tools=block_tools,
                             allowed_tools=allowed_tools) if LT else None
-    if policy and payload.get("tools"):
-        payload["tools"] = policy.visible(payload["tools"])
-        if not payload["tools"]:
-            payload.pop("tools", None)
+    payload, r = build_payload(
+        query, history, level, stream=True, system=system,
+        max_tokens=max_tokens, options=options, policy=policy)
 
     yield ("level", r)
 
@@ -515,6 +500,7 @@ def ask_with_system(query: str, system: str,
                     max_tokens: int | None = None,
                     block_tools: set[str] | None = None,
                     allowed_tools: set[str] | None = None,
+                    options: dict | None = None,
                     cancelled=None) -> tuple[str, str, dict]:
     """
     自带 system 地问一次。返回 (正文, 思维链, 档位信息)。
@@ -530,6 +516,7 @@ def ask_with_system(query: str, system: str,
     for kind, val in stream(query, history, level,
                             system=system, max_tokens=max_tokens,
                             block_tools=block_tools, allowed_tools=allowed_tools,
+                            options=options,
                             cancelled=cancelled):
         if kind == "content":
             text.append(val)

@@ -10,6 +10,7 @@ import qq_bridge as QB
 import memory as M
 import thinking as T
 import app_entry
+import brain as B
 
 
 class DeliveryBoundaries(unittest.TestCase):
@@ -41,6 +42,17 @@ class DeliveryBoundaries(unittest.TestCase):
         with patch("maintenance.diagnose", return_value=7) as diagnose:
             self.assertEqual(app_entry.dispatch(["diagnose"]), 7)
             diagnose.assert_called_once_with()
+
+    def test_custom_system_does_not_build_and_discard_default_context(self):
+        options = T.apply_to_memory(level="serious", query="后台任务")
+        with patch.object(B.M, "build_context",
+                          side_effect=AssertionError("default context rebuilt")):
+            payload, used = B.build_payload(
+                "后台任务", level="serious", system="自定义 system",
+                options=options)
+        self.assertEqual(payload["messages"][0]["content"], "自定义 system")
+        self.assertEqual(used["level"], options["level"])
+        self.assertIsNot(used["params"], options["params"])
 
 
 if __name__ == "__main__":

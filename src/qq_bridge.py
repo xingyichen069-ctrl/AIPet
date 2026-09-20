@@ -318,7 +318,6 @@ def build_system(ev: QB.QQEvent) -> tuple[str, dict]:
     走 brain.build_system 的话会带上桌宠的 system_block（思考档位的
     那一堆说明），那在群里是多余的。这里自己拼，只保留有用的部分。
     """
-    import brain as B
     import thinking as T
 
     level = GROUP_LEVEL if ev.scene == "group" else C2C_LEVEL
@@ -342,7 +341,7 @@ def build_system(ev: QB.QQEvent) -> tuple[str, dict]:
     )
 
     system = "\n\n---\n\n".join(p for p in [persona, ctx, platform] if p)
-    return system, {"level": level}
+    return system, {"level": level, "options": options}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -760,7 +759,7 @@ class Bridge:
                 reply, _reasoning, info = B.ask_with_system(
                     prompt, system,
                     level=meta["level"], max_tokens=budget,
-                    block_tools=blocked)
+                    block_tools=blocked, options=meta.get("options"))
         except Exception as e:
             log(f"brain 出错：{type(e).__name__}: {e}")
             return

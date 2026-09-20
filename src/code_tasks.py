@@ -428,6 +428,7 @@ class TaskManager:
     def _ask(self, task: CodeTask, instruction: str) -> tuple[str, dict]:
         import brain as B
         import local_tools as LT
+        import thinking as T
 
         system = _task_system(task)
         ctx = {
@@ -443,10 +444,11 @@ class TaskManager:
         }
         blocked = {"code_task", "remember", "mood", "agreement",
                    "quiet_company"}
+        options = T.apply_to_memory(level="serious", query=instruction)
         with LT.bind_context(**ctx):
             reply, _reasoning, info = B.ask_with_system(
                 instruction, system, level="serious", max_tokens=12000,
-                block_tools=blocked,
+                block_tools=blocked, options=options,
                 cancelled=task.cancel_event.is_set)
         return (reply or "").strip(), info or {}
 
