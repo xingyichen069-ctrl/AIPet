@@ -306,15 +306,20 @@ def prefetch_search(query: str) -> tuple[str, bool]:
         return "", False
     try:
         import local_tools as LT
-        kind = "news" if re.search(r"新闻|最新|刚刚|实时|比分|赛况", query) else "text"
+        if re.search(r"比分|赛况|比赛进行|实时比分|赛果", query or ""):
+            score = LT.sports_scores(query, 10)
+            if score and not score.startswith("未找到"):
+                return score, True
+        kind = "news" if re.search(r"新闻|消息|进展|刚刚|实时|比分|赛况|赛果", query) else "text"
         import tools as Search
         # 实时体育/新闻使用当前配置的搜索后端；后端失败时再走普通搜索回退。
         backend = Search.TOOLS_CFG.get("search_backend", "ddgs")
-        result = Search.as_prompt_block(query, 5, kind=kind,
-                                        freshness="day", backend=backend)
-        if result.startswith("（搜索失败"):
+        # 把原问题交给搜索层解析，避免把“最新版本”误压成一天内新闻。
+        result = Search.as_prompt_block(query, 5, kind=kind, backend=backend)
+        if result.startswith("（搜索"):
             result = LT.web_search(query, kind=kind, max_results=5)
-        if not result or result.startswith("搜索失败"):
+        if (not result or result.startswith("搜索失败") or
+                result.startswith("新闻读取失败")):
             return "", False
         return result, True
     except Exception as e:

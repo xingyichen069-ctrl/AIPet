@@ -120,20 +120,22 @@ def get_system() -> str:
     return "\n".join(lines)
 
 
-def web_search(query: str, kind: str = "text", max_results: int = 5,
-               incremental: bool = True, freshness: str = "") -> str:
-    """联网搜索。需要时效性信息时用。会自动提取关键词、去重并增量合并结果。"""
+def web_search(query: str, kind: str = "auto", max_results: int = 5,
+               freshness: str = "auto", force_refresh: bool = False,
+               incremental: bool = True) -> str:
+    """联网搜索。宿主会自动识别“最新/最近/今天/刷新”等时效语义。"""
     try:
         import tools
         return tools.as_prompt_block(query, int(max_results), kind,
                                      incremental=bool(incremental),
-                                     freshness=freshness)
+                                     freshness=freshness or "auto",
+                                     force_refresh=bool(force_refresh))
     except Exception as e:
         return f"搜索失败：{e}"
 
 
 def news_latest(query: str, max_results: int = 8) -> str:
-    """从 Google News RSS 获取当天最新新闻，适合新闻和赛况更新。"""
+    """用当前配置的搜索后端读取当天新闻，适合新闻和赛况更新。"""
     try:
         import tools
         return tools.as_prompt_block(
@@ -142,6 +144,71 @@ def news_latest(query: str, max_results: int = 8) -> str:
             backend=tools.TOOLS_CFG.get("search_backend", "ddgs"))
     except Exception as e:
         return f"新闻读取失败：{e}"
+
+
+def sports_scores(query: str, max_results: int = 10) -> str:
+    """读取 ESPN 公开足球赛程接口，优先返回今天及最近几天的实时赛况。"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import datetime as _dt
+    import urllib.parse
+    import urllib.request
+
+    aliases = {
+        "阿森纳": "arsenal", "枪手": "arsenal", "arsenal": "arsenal",
+        "曼城": "manchester city", "man city": "manchester city",
+        "mancity": "manchester city", "桑德兰": "sunderland", "sunderland": "sunderland",
+        "曼联": "manchester united", "man united": "manchester united",
+        "利物浦": "liverpool", "切尔西": "chelsea", "热刺": "tottenham",
+    }
+    q = (query or "").lower()
+    wanted = [v for k, v in aliases.items() if k in q]
+    today = M.now().date()
+    def fetch_day(delta: int) -> list[dict]:
+        date = today + _dt.timedelta(days=delta)
+        url = ("https://site.web.api.espn.com/apis/site/v2/sports/"
+               f"soccer/eng.1/scoreboard?dates={date:%Y%m%d}")
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                data = json.loads(r.read().decode("utf-8"))
+        except Exception:
+            return []
+        found = []
+        for event in data.get("events") or []:
+            competition = (event.get("competitions") or [{}])[0]
+            teams = competition.get("competitors") or []
+            names = [str(x.get("team", {}).get("displayName", "")) for x in teams]
+            joined = " ".join(names).lower()
+            if wanted and not any(w in joined for w in wanted):
+                continue
+            status = event.get("status", {}).get("type", {})
+            scores = []
+            for team in teams:
+                name = team.get("team", {}).get("displayName", "")
+                scores.append(f"{name} {team.get('score', '?')}")
+            start = event.get("date", "")
+            found.append({"id": event.get("id"), "start": start,
+                          "status": status.get("detail") or status.get("description", ""),
+                          "score": " - ".join(scores), "name": event.get("name", "")})
+        return found
+
+    events = []
+    seen = set()
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        futures = [pool.submit(fetch_day, delta) for delta in (0, -1, 1, -2, 2)]
+        for future in as_completed(futures):
+            for event in future.result():
+                if event["id"] in seen:
+                    continue
+                seen.add(event["id"])
+                events.append(event)
+    events.sort(key=lambda x: x.get("start", ""), reverse=True)
+    if not events:
+        return "未找到匹配的足球比赛。"
+    lines = ["## 实时足球比分（ESPN）"]
+    for e in events[:max(1, int(max_results))]:
+        lines.append(f"- {e['score']}｜{e['status']}｜开赛 {e['start']}")
+    return "\n".join(lines)
 
 
 def recall(query: str, limit: int = 8) -> str:
@@ -523,20 +590,23 @@ SPECS = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "联网搜索最新信息。涉及新闻、时事、你不确定的事实、"
-                           "或训练数据之后才发生的事时用。",
+            "description": "联网搜索信息。涉及新闻、时事、你不确定的事实、或训练数据之后才发生的事时用；"
+                           "查询中出现最新、最近、今天、刚刚、刷新等词时，系统会自动启用时效模式并按需绕过缓存。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "搜索关键词"},
-                    "kind": {"type": "string", "enum": ["text", "news"],
-                             "description": "text 普通搜索，news 新闻"},
+                    "kind": {"type": "string", "enum": ["auto", "text", "news"],
+                             "description": "auto 自动判断；text 普通搜索；news 新闻"},
                     "max_results": {"type": "integer",
                                     "description": "返回几条，默认 5"},
-                    "incremental": {"type": "boolean",
-                                     "description": "是否与上次结果增量合并并去重，默认 true"},
                     "freshness": {"type": "string",
-                                   "description": "时间范围提示，如 day、week、month；留空由后端决定"},
+                                   "enum": ["auto", "day", "week", "month", "year"],
+                                   "description": "时间范围；auto 由系统从原问题识别"},
+                    "force_refresh": {"type": "boolean",
+                                      "description": "是否跳过缓存重新请求，默认 false"},
+                    "incremental": {"type": "boolean",
+                                     "description": "普通搜索是否与旧结果增量合并；新闻/时效查询会自动关闭"},
                 },
                 "required": ["query"],
             },
@@ -551,6 +621,21 @@ SPECS = [
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "新闻主题、球队或事件"},
+                    "max_results": {"type": "integer", "minimum": 1, "maximum": 10},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sports_scores",
+            "description": "读取足球实时比分和最近赛果。问比分、赛况、比赛进行到哪时优先使用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "球队名或比赛名称"},
                     "max_results": {"type": "integer", "minimum": 1, "maximum": 10},
                 },
                 "required": ["query"],
@@ -806,11 +891,13 @@ DISPATCH = {
                            bool(a.get("force", False))),
     "get_time": lambda a: get_time(),
     "get_system": lambda a: get_system(),
-    "web_search": lambda a: web_search(a.get("query", ""), a.get("kind", "text"),
-                                       a.get("max_results", 5),
-                                       a.get("incremental", True), a.get("freshness", "")),
+    "web_search": lambda a: web_search(a.get("query", ""), a.get("kind", "auto"),
+                                       a.get("max_results", 5), a.get("freshness", "auto"),
+                                       a.get("force_refresh", False), a.get("incremental", True)),
     "news_latest": lambda a: news_latest(a.get("query", ""),
                                           a.get("max_results", 8)),
+    "sports_scores": lambda a: sports_scores(a.get("query", ""),
+                                              a.get("max_results", 10)),
     "recall": lambda a: recall(a.get("query", ""), a.get("limit", 8)),
     "remember": lambda a: remember(a.get("text", ""), a.get("importance", 3),
                                    a.get("tags", ""), a.get("decay", "normal"),
@@ -849,7 +936,7 @@ def selftest(only: str | None = None) -> int:
         if only and name != only:
             continue
         try:
-            out = fn({"query": "测试"} if name in ("web_search", "recall", "news_latest") else {})
+            out = fn({"query": "测试"} if name in ("web_search", "recall", "news_latest", "sports_scores") else {})
             # 联网工具这里要测的是"后端抽风时会不会优雅降级"，不是"必须搜到东西"。
             # 拿"测试"两个字去搜，DDGS 本来就常常返回空 —— 那是正常结果，
             # 不是失败。之前这条会随机变红，就是这么来的。

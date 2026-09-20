@@ -104,6 +104,13 @@
       "general": 3600,
       "news": 900,
       "page": 86400
+    },
+    "search_policy": {
+      "_说明": "搜索时效策略。通常不需要修改。",
+      "latest_news_default": "day",
+      "recent_default": "week",
+      "expand_freshness_when_empty": true,
+      "fresh_search_incremental": false
     }
   },
   "knowledge": {
