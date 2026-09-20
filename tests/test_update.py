@@ -1,4 +1,6 @@
 import json
+import hashlib
+import platform
 from pathlib import Path
 import sys
 import tempfile
@@ -9,6 +11,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import update as U
+import portable_update as PU
 
 
 class UpdateTests(unittest.TestCase):
@@ -65,6 +68,98 @@ class UpdateTests(unittest.TestCase):
             self.assertTrue(result["updated"])
             self.assertEqual(result["ref"], "all-round")
             self.assertEqual((target / "src" / "new.py").read_text(encoding="utf-8"), "branch")
+
+    def _package_tree(self, root: Path, version: str = "0.6.0") -> dict:
+        files = {
+            "AIPet.exe": b"launcher",
+            "VERSION": version.encode("utf-8"),
+            "runtime/python.exe": b"python",
+            "runtime/pythonw.exe": b"pythonw",
+            "src/app_entry.py": b"print('entry')\n",
+            "src/windows_launcher.py": b"print('launcher')\n",
+            "src/portable_update.py": b"print('updater')\n",
+            "src/update_lifecycle.py": b"print('lifecycle')\n",
+            "src/app_paths.py": b"print('paths')\n",
+            "data/config.example.json": b"{}\n",
+            "data/thinking.json": b"{}\n",
+            "themes/custom.qss": b"default\n",
+        }
+        for name, content in files.items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        manifest = {
+            "format": 1,
+            "app": "AIPet",
+            "version": version,
+            "python": platform.python_version(),
+            "architecture": "64-bit",
+            "runtime_files_copied": 2,
+            "files": [
+                {"path": name, "size": len(content),
+                 "sha256": hashlib.sha256(content).hexdigest()}
+                for name, content in sorted(files.items())
+            ],
+        }
+        (root / PU.MANIFEST).write_text(json.dumps(manifest), encoding="utf-8")
+        return manifest
+
+    def test_complete_package_is_verified_and_keeps_custom_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            staged = base / "staged"
+            target = base / "AIPet"
+            self._package_tree(staged)
+            (target / "data").mkdir(parents=True)
+            (target / "data" / "config.example.json").write_text("user-template", encoding="utf-8")
+            (target / "themes").mkdir()
+            (target / "themes" / "custom.qss").write_text("my-theme", encoding="utf-8")
+            with patch.object(PU, "health_check") as health:
+                result = PU.install_staged(staged, target)
+            self.assertTrue(result["ok"])
+            health.assert_any_call(staged, result and PU.read_manifest(staged))
+            self.assertEqual((target / "AIPet.exe").read_bytes(), b"launcher")
+            self.assertEqual((target / "data" / "config.example.json").read_text(encoding="utf-8"),
+                             "user-template")
+            self.assertEqual((target / "themes" / "custom.qss").read_text(encoding="utf-8"), "my-theme")
+            self.assertTrue((target / PU.MANIFEST).is_file())
+            self.assertIn("themes/custom.qss", result["skipped"])
+
+    def test_package_install_rolls_back_after_post_copy_health_failure(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            staged = base / "staged"
+            target = base / "AIPet"
+            self._package_tree(staged)
+            (target / "src").mkdir(parents=True)
+            (target / "src" / "app_entry.py").write_text("old", encoding="utf-8")
+            with patch.object(PU, "health_check", side_effect=[None, RuntimeError("bad runtime")]):
+                with self.assertRaises(RuntimeError):
+                    PU.install_staged(staged, target)
+            self.assertEqual((target / "src" / "app_entry.py").read_text(encoding="utf-8"), "old")
+            self.assertFalse((target / PU.MANIFEST).exists())
+            journals = list((target / "backups").glob("package-update-*/transaction.json"))
+            self.assertTrue(journals)
+            self.assertEqual(json.loads(journals[0].read_text(encoding="utf-8"))["state"], "rolled_back")
+
+    def test_package_manifest_rejects_private_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            manifest = self._package_tree(root)
+            item = {"path": "data/secrets.json", "size": 1, "sha256": "0" * 64}
+            manifest["files"].append(item)
+            (root / PU.MANIFEST).write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                PU.read_manifest(root)
+
+    def test_source_update_refuses_to_touch_portable_install(self):
+        with tempfile.TemporaryDirectory() as d:
+            target = Path(d) / "AIPet"
+            target.mkdir()
+            (target / PU.MANIFEST).write_text("{}", encoding="utf-8")
+            result = U.update("all-round", "branch", target)
+            self.assertFalse(result["ok"])
+            self.assertIn("完整发布包", result["error"])
 
 
 if __name__ == "__main__":

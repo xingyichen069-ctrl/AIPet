@@ -70,6 +70,7 @@ except ImportError as exc:
 
 import memory as M          # noqa: E402
 import thinking as T        # noqa: E402
+import update_lifecycle as UL  # noqa: E402
 from ui_theme import is_daytime
 from desktop_state import Appearance
 from theme_widgets import ThemeMenu, add_appearance_menu
@@ -1537,7 +1538,14 @@ def main() -> None:
     # 太吵，结果会显示在对话窗口标题和右键菜单里。
     QTimer.singleShot(1200, lambda: pet.probe_proxy(announce=False))
 
-    sys.exit(app.exec())
+    # A detached package installer publishes a cooperative stop request. The
+    # desktop exits through its normal bounded shutdown path; it is never
+    # terminated by PID from the updater.
+    update_timer = QTimer(pet)
+    update_timer.timeout.connect(lambda: pet.quit_safely() if UL.pending(ROOT) else None)
+    update_timer.start(250)
+    with UL.registered(ROOT, "desktop"):
+        sys.exit(app.exec())
 
 
 if __name__ == "__main__":

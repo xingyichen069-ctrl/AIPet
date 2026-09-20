@@ -371,6 +371,14 @@ def install_archive(archive: Path, target: Path = M.ROOT) -> dict:
 
 def update(ref: str = "", kind: str = "tag", target: Path = M.ROOT) -> dict:
     """下载并安装一个 tag/branch；未给 ref 时只安装最新 tag。"""
+    # A portable installation is a tested launcher + runtime combination. A
+    # source ZIP must never leave those components at mixed versions.
+    if (Path(target) / "release-manifest.json").is_file():
+        return {
+            "ok": False,
+            "updated": False,
+            "error": "便携版必须使用带 release-manifest.json 的完整发布包更新。",
+        }
     requested = str(ref or "").strip()
     if requested:
         selected, selected_kind = requested, kind
@@ -413,6 +421,25 @@ def update(ref: str = "", kind: str = "tag", target: Path = M.ROOT) -> dict:
                 pass
 
 
+def package_update(archive: Path, target: Path = M.ROOT, *, restart: bool = True) -> dict:
+    """Stage a complete portable package and hand it to a detached updater."""
+    target = Path(target).resolve()
+    if not (target / "release-manifest.json").is_file():
+        return {"ok": False, "updated": False,
+                "error": "当前安装不是便携发布版，不能安装整包更新。"}
+    try:
+        import portable_update as PU
+        import update_lifecycle as UL
+        active = UL.active_processes(target)
+        staged = PU.stage_archive(Path(archive), target)
+        result = PU.launch_staged(staged, target, wait_pids=active, restart=restart)
+        return {"ok": True, "updated": False, "pending": True,
+                "version": PU.verify_package(staged)["version"], **result}
+    except Exception as exc:
+        return {"ok": False, "updated": False,
+                "error": f"{type(exc).__name__}: {str(exc)[:180]}"}
+
+
 def check(timeout: float = TIMEOUT) -> dict:
     """
     查一次。**不抛异常** —— 调用方是界面和 QQ，拿到异常没处放。
@@ -424,6 +451,9 @@ def check(timeout: float = TIMEOUT) -> dict:
         "ok": False, "current": cur, "latest": "", "newer": False,
         "url": f"https://github.com/{repo()}/tags", "error": "",
     }
+    if (M.ROOT / "release-manifest.json").is_file():
+        out["error"] = "便携版需要带 release-manifest.json 的完整发布包，不能用源码更新。"
+        return out
     try:
         tags = fetch_tags(timeout)
     except urllib.error.HTTPError as e:
@@ -553,12 +583,21 @@ def main() -> None:
         group = parser.add_mutually_exclusive_group()
         group.add_argument("--tag", help="安装指定 tag，例如 v0.5.0")
         group.add_argument("--branch", help="安装指定分支，例如 all-round")
+        group.add_argument("--package", help="安装带发布清单的完整便携包 zip")
         parser.add_argument("--yes", action="store_true", help="确认覆盖代码文件")
         ns = parser.parse_args(args)
         if not ns.yes:
             print("这会覆盖公开代码文件，并在 backups/update-<时间>/ 留一份备份。")
             print("确认后重跑：python src/update.py update --yes")
             sys.exit(2)
+        if ns.package:
+            result = package_update(Path(ns.package))
+            if not result.get("ok"):
+                print(f"整包更新失败：{result.get('error') or '未知错误'}")
+                sys.exit(1)
+            print(f"完整发布包已暂存（{result.get('version', '新版本')}），正在等待桌宠和 QQ 退出。")
+            print(f"更新结果：{result.get('result', M.ROOT / 'data' / 'update-result.json')}")
+            sys.exit(0)
         ref = ns.tag or ns.branch or ""
         kind = "branch" if ns.branch else "tag"
         result = update(ref, kind)

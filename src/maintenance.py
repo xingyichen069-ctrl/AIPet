@@ -7,8 +7,9 @@ import sys
 import time
 from pathlib import Path
 
+from app_paths import PATHS
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = PATHS.install
 BRIDGE = ROOT / "src" / "qq_bridge.py"
 LOG = ROOT / "data" / "qq.log"
 DESKTOP_LOCK = ROOT / "data" / "desktop.lock"

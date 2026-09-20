@@ -58,6 +58,7 @@ import local_tools as LT  # noqa: E402
 import people as P  # noqa: E402
 import qq_bot as QB  # noqa: E402
 import qq_text as QT  # noqa: E402
+import update_lifecycle as UL  # noqa: E402
 
 if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("-", "") != "utf8":
     try:
@@ -1077,7 +1078,7 @@ def selftest() -> int:
 # ═══════════════════════════════════════════════════════════════
 
 def run(reply_enabled: bool = True) -> int:
-    from PySide6.QtCore import QCoreApplication
+    from PySide6.QtCore import QCoreApplication, QTimer
     import brain as B
 
     app = QCoreApplication(sys.argv)
@@ -1105,7 +1106,21 @@ def run(reply_enabled: bool = True) -> int:
     )
     gw.start()
     log(f"跑起来了（{'会回复' if reply_enabled else '只收不发'}）。Ctrl+C 停。")
-    return app.exec()
+    update_timer = QTimer()
+
+    def stop_for_update():
+        if UL.pending(M.ROOT):
+            gw.stop()
+            app.quit()
+
+    update_timer.timeout.connect(stop_for_update)
+    update_timer.start(250)
+    try:
+        with UL.registered(M.ROOT, "qq"):
+            return app.exec()
+    finally:
+        update_timer.stop()
+        gw.stop()
 
 
 def main() -> None:
