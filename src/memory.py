@@ -98,6 +98,14 @@ CFG = load_config()
 P = CFG["paths"]
 
 
+def reload_config() -> dict:
+    """Reload the editable application config after an in-app settings save."""
+    global CFG, P
+    CFG = load_config()
+    P = CFG["paths"]
+    return CFG
+
+
 def _p(key: str) -> Path:
     return ROOT / P[key]
 

@@ -22,7 +22,7 @@ migrate.py —— 换新装的时候，把私人内容搬过去
 搬的是**代码之外、重建不出来的东西**：人格、记忆、密钥、QQ 绑定、
 你的调参、心理点日志、约定、知识库、历史备份。
 
-不搬的是**能重建或不该带的**：运行环境（重跑一次准备环境.bat）、
+不搬的是**能重建或不该带的**：运行环境（重跑一次 `AIPet.exe prepare`）、
 搜索缓存、运行时状态文件。
 
 ★ 特别说一条：`data/secrets.json` 在这里**是要搬的**。
@@ -35,16 +35,16 @@ migrate.py —— 换新装的时候，把私人内容搬过去
   用法
 ═══════════════════════════════════════════════════════════════
 
-    python tools/migrate.py D:\\旧版\\AIPet            # 先看清单，问你要不要搬
-    python tools/migrate.py D:\\旧版\\AIPet --dry-run  # 只看，不动
-    python tools/migrate.py D:\\旧版\\AIPet --yes      # 不问，直接搬
-    python tools/migrate.py D:\\旧版\\AIPet --into D:\\新版\\AIPet
+    AIPet.exe migrate D:\\旧版\\AIPet            # 先看清单，问你要不要搬
+    AIPet.exe migrate D:\\旧版\\AIPet --dry-run  # 只看，不动
+    AIPet.exe migrate D:\\旧版\\AIPet --yes      # 不问，直接搬
+    AIPet.exe migrate D:\\旧版\\AIPet --into D:\\新版\\AIPet
 
 目标默认是**这个脚本所在的那个安装**（也就是新装自己）。
 真的开搬之前，目标里被覆盖的文件会先存进 `backups/迁移前-<时间>/`，
 搬错了还能翻回来。
 
-    python tools/migrate.py selftest    # 自检（造两个假目录真搬一遍）
+    AIPet.exe migrate selftest          # 自检（造两个假目录真搬一遍）
 """
 
 from __future__ import annotations
@@ -108,7 +108,7 @@ RUNTIME_DIRS = ("runtime", ".venv")
 
 # (路径, 为什么不搬)
 SKIP: list[tuple[str, str]] = [
-    ("runtime/  .venv/",                 "运行环境。加 --with-runtime 一起拷（同机换装最快），否则新装里跑一次 准备环境.bat"),
+    ("runtime/  .venv/",                 "运行环境。加 --with-runtime 一起拷（同机换装最快），否则新装里跑一次 AIPet.exe prepare"),
     ("data/cache/",                      "搜索缓存、启动日志、预览图，会自己重建"),
     ("data/qq.log  qq.pid  qq_status.json", "运行时状态。搬过去会让桌宠以为 QQ 还连着"),
     ("view/",                            "记忆面板，程序生成"),
@@ -380,7 +380,7 @@ def guess_source(target: Path) -> list[Path]:
     """
     在目标旁边找找有没有像个 AIPet 旧装的目录。
 
-    ★ 为什么要有这个：双击 `迁移私人内容.bat` 是不带参数的，原来只会打一段
+    ★ 为什么要有这个：直接运行 `AIPet.exe migrate` 不带参数时，原来只会打一段
       用法说明然后退出 —— 用户的感受就是"点了没反应"。而这个脚本的用法
       （把旧目录拖到 bat 上）本来就不直观。
 
@@ -527,15 +527,14 @@ def main() -> None:
             for p in found[:8]:
                 mark = "有私人内容" if (p / "persona").exists() else "空的（刚解压？）"
                 print(f"    {p}    {mark}")
-            print("\n  用法：python tools\\migrate.py <旧目录> [--dry-run]")
+            print("\n  用法：AIPet.exe migrate <旧目录> [--dry-run]")
             sys.exit(2)
         else:
             ap.print_help()
             print("""
   没给旧目录，旁边也没找到别的 AIPet 装。怎么用：
 
-    把【旧版目录】拖到 迁移私人内容.bat 上
-    或者命令行：python tools\\migrate.py D:\\旧版\\AIPet
+    或者命令行：AIPet.exe migrate D:\\旧版\\AIPet
 
   先只看清单不搬，加 --dry-run。
 
@@ -601,7 +600,7 @@ def main() -> None:
                   f"  {r['files']} 个文件  {r['size'] / 1048576:.0f} MB{over}")
         if any(r["name"] == ".venv" for r in rt):
             print("              ★ .venv 里写死了绝对路径，拷过去多半用不了 —— "
-                  "真起不来就跑一次 准备环境.bat")
+                  "真起不来就跑一次 AIPet.exe prepare")
         total += sum(r["size"] for r in rt) / 1024
         print(f"\n  连运行环境一起合计 {total / 1024:.1f} MB")
 
@@ -654,7 +653,7 @@ def main() -> None:
                 pass
         else:
             print(f"\n  ★ 旧装的 QQ 桥（PID {bridge}）没停掉，自己看一眼：")
-            print("    任务管理器里找 pythonw.exe，或者回旧目录双击 停止QQ.bat。")
+            print("    任务管理器里找 pythonw.exe，或者回旧目录运行 AIPet.exe qq stop。")
 
     copied, over, backup_dir = apply(rows, target)
     print(f"\n  搬了 {copied} 个，覆盖 {over} 个。")
@@ -668,11 +667,11 @@ def main() -> None:
         copy_runtime(rt)
         print("  运行环境拷完了。")
 
-    steps = ["在新目录跑一次 准备环境.bat（运行环境没搬）" if not rt
+    steps = ["在新目录跑一次 AIPet.exe prepare（运行环境没搬）" if not rt
              else "直接启动桌宠试试"]
     steps.append("确认 data\\secrets.json 在，再启动桌宠")
     if bridge:
-        steps.append("在新目录双击 启动QQ.bat —— 旧的那条刚被停掉，QQ 现在没接上")
+        steps.append("在新目录运行 AIPet.exe qq start —— 旧的那条刚被停掉，QQ 现在没接上")
     steps.append("旧目录先别删，跑顺了再删")
 
     print("\n  接下来：")

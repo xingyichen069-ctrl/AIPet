@@ -1093,6 +1093,12 @@ class PetWindow(QWidget):
         if self.chat.input.toPlainText() == "":
             self.chat.input.setFocus()
 
+    def open_settings(self):
+        from settings_ui import SettingsDialog
+        dialog = SettingsDialog(ROOT, self.appearance, self, self)
+        dialog.saved.connect(self.panel.update)
+        dialog.exec()
+
     def mouseDoubleClickEvent(self, e):
         if e.button() == Qt.LeftButton:
             self.open_chat()
@@ -1278,6 +1284,7 @@ class PetWindow(QWidget):
     def _build_menu(self):
         m = ThemeMenu(self.appearance, self, heading=True)
         m.addAction("打开对话", self.open_chat)
+        m.addAction("打开设置", self.open_settings)
         m.addAction("查看约定", self.companion.show_tasks)
         if self.companion.store.focus():
             m.addAction("结束陪伴", self.companion.stop_focus)
@@ -1295,7 +1302,7 @@ class PetWindow(QWidget):
         if qs["state"] == "ready":
             m.addAction("查看群里的人", self._show_people)
         else:
-            off = m.addAction("QQ 没在跑（用 tools/qq_ctl.py start 启动）")
+            off = m.addAction("QQ 没在跑（设置页或 AIPet.exe qq start）")
             off.setEnabled(False)
         add_appearance_menu(m, self.appearance)
         advanced = m.addMenu("高级")
@@ -1507,6 +1514,7 @@ def main() -> None:
         pet.tray = QSystemTrayIcon(QIcon(str(CHAR_PNG)), pet)
         tray_menu = ThemeMenu(pet.appearance, pet, heading=True)
         tray_menu.addAction("打开对话", pet.open_chat)
+        tray_menu.addAction("打开设置", pet.open_settings)
         tray_menu.addAction("显示桌宠 / 恢复点击", pet.reveal)
         add_appearance_menu(tray_menu, pet.appearance)
         tray_menu.addAction("退出", pet.quit_safely)

@@ -75,7 +75,7 @@ def _runtime_distributions() -> dict[str, metadata.Distribution]:
             distribution = metadata.distribution(requirement.name)
         except metadata.PackageNotFoundError as exc:
             raise RuntimeError(
-                f"构建环境缺少 {requirement.name}，请先运行准备环境.bat。"
+                f"构建环境缺少 {requirement.name}，请先运行 AIPet.exe prepare 或准备源码环境。"
             ) from exc
         selected[name] = distribution
         for dependency in distribution.requires or ():

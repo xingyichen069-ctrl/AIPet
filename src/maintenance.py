@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -13,6 +14,7 @@ ROOT = PATHS.install
 BRIDGE = ROOT / "src" / "qq_bridge.py"
 LOG = ROOT / "data" / "qq.log"
 DESKTOP_LOCK = ROOT / "data" / "desktop.lock"
+REQUIREMENTS = ROOT / "requirements.txt"
 
 
 def _python(console: bool = False) -> Path:
@@ -62,18 +64,169 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def status() -> int:
-    """Show the install-wide status without importing Qt."""
-    desktop_pid = 0
+def _desktop_pid() -> int:
     try:
-        desktop_pid = int(DESKTOP_LOCK.read_text(encoding="utf-8").splitlines()[0])
+        return int(DESKTOP_LOCK.read_text(encoding="utf-8").splitlines()[0])
     except (OSError, ValueError, IndexError):
+        return 0
+
+
+def desktop_stop() -> int:
+    """Stop a wedged desktop from the same AIPet.exe command boundary."""
+    pid = _desktop_pid()
+    if not pid:
+        print("桌宠没在跑。")
+        return 0
+    if _pid_alive(pid):
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", str(pid)], check=False,
+                    capture_output=True, text=True, timeout=15,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            else:
+                os.kill(pid, 9)
+        except (OSError, subprocess.SubprocessError) as exc:
+            print(f"桌宠停不掉：{exc}")
+            return 1
+        if _pid_alive(pid):
+            print(f"已发停止指令，但 PID {pid} 仍在运行。")
+            return 1
+        print(f"桌宠已停止（PID {pid}）。")
+    else:
+        print(f"进程已经不在了（PID {pid}），只清理残留锁文件。")
+    try:
+        DESKTOP_LOCK.unlink()
+    except OSError:
         pass
+    return 0
+
+
+def _imports_ok(python: Path) -> bool:
+    try:
+        result = subprocess.run(
+            [str(python), "-c", "import PySide6, live2d.v3, ddgs"],
+            cwd=str(ROOT), capture_output=True, text=True, timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
+def _run(command: list[str]) -> bool:
+    try:
+        return subprocess.run(command, cwd=str(ROOT), check=False).returncode == 0
+    except OSError:
+        return False
+
+
+def prepare() -> int:
+    """Prepare a source checkout, or verify the runtime in a portable build."""
+    portable = ROOT / "runtime" / "python.exe"
+    if portable.exists():
+        if _imports_ok(portable):
+            print(f"便携运行环境已就绪：{portable}")
+            return 0
+        print("便携运行环境存在，但依赖检查没有通过。请重新解压完整发布包。")
+        return 1
+
+    venv = ROOT / ".venv" / "Scripts" / "python.exe"
+    if venv.exists() and _imports_ok(venv):
+        print(f"源码运行环境已就绪：{venv}")
+        return 0
+
+    mirror = "https://pypi.tuna.tsinghua.edu.cn/simple"
+    uv = shutil.which("uv")
+    if uv:
+        print("用 uv 创建源码环境…")
+        if _run([uv, "venv", "--python", "3.12", ".venv"]):
+            if _run([uv, "pip", "install", "--python", str(venv), "-r",
+                     str(REQUIREMENTS), "--index-url", mirror]):
+                if _imports_ok(venv):
+                    print(f"环境已就绪：{venv}")
+                    return 0
+        print("uv 这条路没有完成，继续尝试系统 Python。")
+
+    candidates: list[list[str]] = []
+    py = shutil.which("py")
+    if py and os.name == "nt":
+        candidates.extend([[py, f"-{version}", "-m", "venv", ".venv"]
+                           for version in ("3.14", "3.13", "3.12", "3.11", "3.10")])
+    if sys.executable:
+        candidates.append([sys.executable, "-m", "venv", ".venv"])
+    created = venv.exists()
+    for command in candidates:
+        if created or _run(command):
+            created = True
+            break
+    if not created:
+        print("没有找到可用的 64 位 Python 3.10–3.14。")
+        return 1
+
+    print("安装依赖，首次可能需要几分钟…")
+    if not _run([str(venv), "-m", "pip", "install", "--upgrade", "pip"]):
+        print("pip 没有准备好。")
+        return 1
+    installed = _run([str(venv), "-m", "pip", "install", "-r",
+                      str(REQUIREMENTS), "--index-url", mirror])
+    if not installed:
+        installed = _run([str(venv), "-m", "pip", "install", "-r", str(REQUIREMENTS)])
+    if not installed or not _imports_ok(venv):
+        print("依赖没有装完整，请检查网络和 Python 版本。")
+        return 1
+    print(f"环境已就绪：{venv}")
+    return 0
+
+
+def memory_show() -> int:
+    """Print the same human-readable memory view formerly behind the batch file."""
+    import memory as M
+
+    entries = sorted(M.load_journal(), key=lambda item: item["ts"], reverse=True)
+    if not entries:
+        print("记忆库是空的。")
+        return 0
+    state = M.load_state()
+    print(f"共 {len(entries)} 条 · 亲密度 {state.get('closeness', 0)} · "
+          f"累计互动 {state.get('interaction_count', 0)} 次\n")
+    for entry in entries:
+        speaker = entry.get("speaker", "owner")
+        who = "  " if speaker == "owner" else "群"
+        print(f"  {who} [{entry['ts'][:16]}] ({entry.get('decay', 'normal'):<9}) "
+              f"{'★' * entry.get('importance', 3):<5} {entry['text']}")
+    return 0
+
+
+def status(log_lines: int = 0) -> int:
+    """Show the install-wide status without importing Qt."""
+    desktop_pid = _desktop_pid()
     desktop_ok = _pid_alive(desktop_pid)
     print("AIPet 运行状态")
     print(f"  桌宠     {'在跑（PID ' + str(desktop_pid) + '）' if desktop_ok else '没在跑'}")
     qq_rc = qq_status()
+    if log_lines:
+        log = ROOT / "data" / "qq.log"
+        try:
+            lines = log.read_text(encoding="utf-8", errors="replace").splitlines()[-log_lines:]
+        except OSError as exc:
+            lines = [f"读不到日志：{exc}"]
+        print(f"\nQQ 日志最后 {log_lines} 行：")
+        print("\n".join(lines))
     return 0 if desktop_ok and qq_rc == 0 else 1
+
+
+def watch_status(interval: float = 5.0, log_lines: int = 0) -> int:
+    """Refresh status until Ctrl+C, replacing the old batch-file watch mode."""
+    try:
+        while True:
+            print("\x1b[2J\x1b[H", end="")
+            status(log_lines)
+            time.sleep(max(.5, interval))
+    except KeyboardInterrupt:
+        print("\n已停止状态监视。")
+        return 0
 
 
 def qq_start() -> int:
@@ -118,6 +271,13 @@ def qq_stop() -> int:
     QB.write_status("stopped", "手动停的")
     print(f"QQ 桥已停止（PID {pid}）。")
     return 0
+
+
+def qq_restart() -> int:
+    result = qq_stop()
+    if result:
+        return result
+    return qq_start()
 
 
 def diagnose() -> int:

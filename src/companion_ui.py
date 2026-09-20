@@ -19,6 +19,7 @@ from ui_theme import is_daytime, touhou_palette, theme_roles
 from theme_widgets import ThemeMenu, add_appearance_menu, draw_motif
 from native_glass import NativeGlass
 from desktop_state import DesktopState, Appearance
+from settings_ui import SettingsDialog
 
 STYLE = '''
 QWidget { color:#423936; font-size:13px; font-weight:400; }
@@ -772,11 +773,17 @@ class ChatWindow(QWidget):
         a = menu.addAction('以前的话题', self.old_topics)
         a.setEnabled(not (self.busy() or self.attachment_busy()))
         menu.addAction('查看约定', self.pet.companion.show_tasks)
+        menu.addAction('设置', self.open_settings)
         add_appearance_menu(menu, self.appearance, self.change_appearance)
         if self.store.focus():
             menu.addAction('结束陪伴', self.pet.companion.stop_focus)
         menu.exec(self.mapToGlobal(self.rect().topRight()))
         menu.deleteLater()
+
+    def open_settings(self):
+        dialog = SettingsDialog(M.ROOT, self.appearance, self.pet, self)
+        dialog.saved.connect(self.refresh_head)
+        dialog.exec()
 
     def change_appearance(self, key, value):
         try:

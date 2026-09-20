@@ -2,7 +2,7 @@
 """
 status.py —— 一眼看清桌宠和 QQ 桥是不是活着
 
-给开发时用的。双击 `查看状态.bat` 就能看，不用记命令。
+给开发时用的。便携版直接运行 `AIPet.exe status`。
 
 它只**读**，不启停任何东西。想启动/停止用 `tools/qq_ctl.py`。
 
@@ -266,7 +266,7 @@ def render(log_lines: int = 0) -> str:
             f"{'没在跑' if pet['state'] == 'off' else pet['note']}"
             + (f"（PID {pet.get('pid')}）" if pet.get("pid") else ""))
         if pet["state"] == "off":
-            add("              双击 启动桌宠.bat 起来")
+            add("              运行 AIPet.exe 起来")
 
     # QQ 桥
     if qq["state"] == "on":

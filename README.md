@@ -4,7 +4,7 @@
 
 完全本地运行，不依赖任何外部服务常驻。她需要一个「大脑」—— 任何 OpenAI 兼容的对话 API 都行，默认接 DeepSeek。
 
-当前版本 `0.5.1` ｜ [更新日志](CHANGELOG.md) ｜ [文档](#文档)
+当前版本 `0.5.0` ｜ [更新日志](CHANGELOG.md) ｜ [文档](#文档)
 
 ---
 
@@ -28,12 +28,12 @@
 
 Windows：
 
-1. 双击 **准备环境.bat**。首次会装依赖，下载约 300 MB
-2. 双击 **启动桌宠.bat**
+1. 便携版直接双击 `AIPet.exe`；源码版运行 `python src/app_entry.py prepare` 准备依赖
+2. 运行 `AIPet.exe` 启动桌宠和聊天窗口
 
 macOS 直接双击 `启动桌宠.command`。
 
-前置只有一样：64 位 Python 3.10–3.14，或者 uv。两个都没装的话，`准备环境.bat` 会告诉你装哪个。
+源码版需要 64 位 Python 3.10–3.14，或者 uv；`AIPet.exe prepare` 会检查便携环境，源码版命令会自动准备 `.venv`。
 
 首次运行会自动生成 `data/config.json`（带注释的完整配置）以及 `persona/` `memory/` `view/` 这些运行目录。
 
@@ -45,7 +45,7 @@ macOS 直接双击 `启动桌宠.command`。
 
 这是有意的：人格是私人的东西，别人的 SOUL.md 对你没有意义。仓库提供的是位置和读取它的代码。
 
-直接编辑 `persona/SOUL.md`，中文写，保存即生效，不用重启。
+打开聊天窗口右上角的“··· → 设置”，在“人格与档案”页编辑并保存；也可以直接编辑 `persona/SOUL.md`，保存即生效，不用重启。
 
 ## 配置
 
@@ -129,20 +129,20 @@ python src/update.py update --branch all-round --yes  # 安装指定分支
 
 更新包不会覆盖 `data/`、`persona/`、`memory/`、密钥、运行环境或自定义主题；更新前的代码备份放在 `backups/update-<时间>/`。
 
-需要 Windows 便携 EXE 时，在仓库根目录运行 `.venv\Scripts\python.exe tools\package_windows.py --force`，然后双击 `dist/AIPet/AIPet.exe`。打包脚本用本机 Visual Studio 编译轻量启动器，并附带独立 Python 运行时；桌宠、本地聊天、后台代码任务和源码更新仍走同一套文件。打包目录里的 `data/`、`memory/` 和 `persona/` 仍是运行资料，请单独备份。
+需要 Windows 便携 EXE 时，在仓库根目录运行 `.venv\\Scripts\\python.exe tools/package_windows.py --force`，然后双击 `dist/AIPet/AIPet.exe`。发布包只把 `AIPet.exe` 作为默认入口，启动、QQ、状态、诊断、迁移和更新由同一个入口分流；打包脚本用本机 Visual Studio 编译轻量启动器，并附带独立 Python 运行时。命令行可用 `AIPet.exe qq start|stop|restart|status`、`AIPet.exe status`、`AIPet.exe stop`、`AIPet.exe memory show`、`AIPet.exe diagnose`、`AIPet.exe migrate` 和 `AIPet.exe update`。打包目录里的 `data/`、`memory/` 和 `persona/` 仍是运行资料，请单独备份。
 
 把新版 zip 解压覆盖到旧目录**不会丢任何东西**：仓库的 zip 根本不含 `persona/` `memory/` `data/`，解压也不会删掉压缩包里没有的文件。
 
 如果你习惯解压到新目录再切换，用迁移脚本把人格、记忆、密钥和配置搬过去：
 
 ```bash
-python tools/migrate.py <旧目录> --dry-run   # 先看清单，不动
-python tools/migrate.py <旧目录>             # 看清单并确认
+AIPet.exe migrate <旧目录> --dry-run   # 先看清单，不动
+AIPet.exe migrate <旧目录>             # 看清单并确认
 ```
 
-或者把旧目录拖到 `迁移私人内容.bat` 上。本机换目录（只是换个盘、不重装）加 `--with-runtime`，连 `runtime/` 一起搬，省一次 300 MB 下载。
+也可以运行 `AIPet.exe migrate <旧目录>`；本机换目录（只是换个盘、不重装）加 `--with-runtime`，连 `runtime/` 一起搬，省一次 300 MB 下载。
 
-脚本会把旧目录里还在跑的 QQ 桥停掉再搬 —— 桥不随窗口退出，留着它两个网关会挂在同一个 bot 上，群里重复回消息。搬完在新目录双击 `启动QQ.bat` 接回来。桌面和开机自启里的快捷方式它会列出来，但不会替你改。
+迁移会把旧目录里还在跑的 QQ 桥停掉再搬 —— 桥不随窗口退出，留着它两个网关会挂在同一个 bot 上，群里重复回消息。搬完在新目录运行 `AIPet.exe qq start` 接回来。桌面和开机自启里的快捷方式它会列出来，但不会替你改。
 
 ## 目录结构
 
@@ -150,6 +150,10 @@ python tools/migrate.py <旧目录>             # 看清单并确认
 AIPet/
 ├── src/                    全部代码
 │   ├── pet.py              桌面窗口 + 思考面板 + 对话窗
+│   ├── settings_ui.py      统一设置中心（人格、API、思考、外观、QQ）
+│   ├── settings_data.py    设置文件的原子读写
+│   ├── app_entry.py        AIPet.exe 的统一命令入口
+│   ├── migrate.py          私人内容迁移
 │   ├── brain.py            大脑：直连 API，工具循环
 │   ├── memory.py           记忆引擎：写入 / 检索 / 评分 / 压缩
 │   ├── thinking.py         思考强度引擎
@@ -180,13 +184,8 @@ AIPet/
 ├── hiyori_zh-Hans/         Live2D 模型
 ├── docs/                   文档
 ├── tests/                  界面测试
-├── tools/                  qq_ctl / migrate 等辅助脚本
-├── 准备环境.bat             第一次用之前跑这个
-├── 启动桌宠.bat / 启动诊断.bat
-├── 启动QQ.bat / 停止QQ.bat
-├── 查看状态.bat             看桌宠和 QQ 桥活着没
-├── 停止桌宠.bat             退不掉的时候从外面停
-└── 迁移私人内容.bat          换新装时搬私人内容
+├── tools/                  开发与打包辅助脚本
+└── AIPet.exe               统一启动、诊断、状态、QQ 和更新入口（便携版）
 ```
 
 ## 依赖
