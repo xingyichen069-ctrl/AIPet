@@ -132,6 +132,17 @@ def web_search(query: str, kind: str = "text", max_results: int = 5,
         return f"搜索失败：{e}"
 
 
+def news_latest(query: str, max_results: int = 8) -> str:
+    """从 Google News RSS 获取当天最新新闻，适合新闻和赛况更新。"""
+    try:
+        import tools
+        return tools.as_prompt_block(
+            query, int(max_results), kind="news", max_chars=5000,
+            incremental=False, freshness="day", backend="google")
+    except Exception as e:
+        return f"新闻读取失败：{e}"
+
+
 def recall(query: str, limit: int = 8) -> str:
     """检索记忆库。想知道"用户以前说过什么"时用。"""
     try:
@@ -533,6 +544,21 @@ SPECS = [
     {
         "type": "function",
         "function": {
+            "name": "news_latest",
+            "description": "读取 Google News 当天最新新闻。用户问最新新闻、事件进展、比赛赛况时优先调用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "新闻主题、球队或事件"},
+                    "max_results": {"type": "integer", "minimum": 1, "maximum": 10},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "recall",
             "description": "检索长期记忆库，查用户以前说过什么、答应过什么。"
                            "涉及用户个人情况、历史对话时用。",
@@ -782,6 +808,8 @@ DISPATCH = {
     "web_search": lambda a: web_search(a.get("query", ""), a.get("kind", "text"),
                                        a.get("max_results", 5),
                                        a.get("incremental", True), a.get("freshness", "")),
+    "news_latest": lambda a: news_latest(a.get("query", ""),
+                                          a.get("max_results", 8)),
     "recall": lambda a: recall(a.get("query", ""), a.get("limit", 8)),
     "remember": lambda a: remember(a.get("text", ""), a.get("importance", 3),
                                    a.get("tags", ""), a.get("decay", "normal"),
@@ -820,7 +848,7 @@ def selftest(only: str | None = None) -> int:
         if only and name != only:
             continue
         try:
-            out = fn({"query": "测试"} if name in ("web_search", "recall") else {})
+            out = fn({"query": "测试"} if name in ("web_search", "recall", "news_latest") else {})
             # 联网工具这里要测的是"后端抽风时会不会优雅降级"，不是"必须搜到东西"。
             # 拿"测试"两个字去搜，DDGS 本来就常常返回空 —— 那是正常结果，
             # 不是失败。之前这条会随机变红，就是这么来的。
