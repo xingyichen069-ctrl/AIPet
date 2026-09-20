@@ -486,9 +486,12 @@ def score_entry(entry: dict, query_toks: set[str], ref: datetime,
 
 
 def retrieve(query: str, query_tags: list[str] | None = None,
-             budget_tokens: int | None = None, top_k: int | None = None) -> list[dict]:
+             budget_tokens: int | None = None, top_k: int | None = None,
+             retrieval: dict | None = None) -> list[dict]:
     """按分数检索记忆，受 token 预算和条数上限约束。"""
-    r = CFG["retrieval"]
+    # 本轮参数由调用者显式传入。不要把一次请求的档位写回全局 CFG，
+    # 否则桌面、QQ 和后台任务并发时会互相污染检索边界。
+    r = retrieval or CFG["retrieval"]
     budget = budget_tokens if budget_tokens is not None else r["token_budget"]
     k = top_k if top_k is not None else r["max_entries"]
 
@@ -605,10 +608,11 @@ def _profile_facts() -> str:
     return "\n\n".join(kept).strip() or "（暂无）"
 
 
-def build_context(query: str, query_tags: list[str] | None = None) -> str:
+def build_context(query: str, query_tags: list[str] | None = None,
+                  retrieval: dict | None = None) -> str:
     """组装要注入 prompt 的记忆片段。"""
     st = load_state()
-    mem = retrieve(query, query_tags)
+    mem = retrieve(query, query_tags, retrieval=retrieval)
 
     parts = ["## 当前关系状态"]
     parts.append(

@@ -129,6 +129,42 @@ class CodeTaskTests(unittest.TestCase):
                 records = json.loads((root / "index.json").read_text(encoding="utf-8"))
                 self.assertEqual({item["title"] for item in records}, {"第一个任务", "第二个任务"})
 
+    def test_stale_task_snapshot_cannot_overwrite_newer_revision(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "tasks"
+            with patch.object(CT, "TASKS_ROOT", root), \
+                    patch.object(CT, "INDEX_FILE", root / "index.json"), \
+                    patch.object(CT.TaskManager, "_start_worker"):
+                first = CT.TaskManager()
+                ctx = {"source": "local", "is_owner": True,
+                       "actor_id": "local", "conversation_key": "local:one"}
+                first.submit(ctx, "原始任务")
+                task_id = first.latest_for(ctx).task_id
+                second = CT.TaskManager()
+
+                first_task = first._tasks[task_id]
+                first_task.state = "running"
+                first_task.updated_at = CT._now()
+                first._dirty.add(task_id)
+                first._persist()
+
+                second_task = second._tasks[task_id]
+                second_task.title = "旧快照不应覆盖"
+                second_task.updated_at = CT._now()
+                second._dirty.add(task_id)
+                second._persist()
+
+                saved = json.loads((root / "index.json").read_text(encoding="utf-8"))[0]
+                self.assertEqual(saved["state"], "running")
+                self.assertNotEqual(saved["title"], "旧快照不应覆盖")
+
+    def test_tool_policy_is_checked_at_execution_time(self):
+        self.assertIn("未获本轮授权", LT.call("fs_list", {},
+                                               allowed_tools={"get_time"}))
+        with patch.object(LT, "fs_list", return_value="allowed"):
+            self.assertEqual(LT.call("fs_list", {}, allowed_tools={"fs_list"}),
+                             "allowed")
+
     def test_upload_file_uses_prepare_parts_and_rich_media(self):
         with tempfile.TemporaryDirectory() as d:
             source = Path(d) / "out.txt"

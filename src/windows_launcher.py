@@ -2,7 +2,6 @@
 from datetime import datetime
 import os
 from pathlib import Path
-import runpy
 import sys
 import traceback
 
@@ -38,6 +37,17 @@ def main():
     root = Path(__file__).resolve().parent.parent
     log_path = root / 'data' / 'cache' / 'windows-startup.log'
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    # Command modes need a real console so ``AIPet.exe status`` and
+    # ``AIPet.exe diagnose`` remain useful.  The GUI mode alone is windowed
+    # and therefore gets the persistent startup log.
+    if len(sys.argv) > 1:
+        from app_entry import main as app_main
+        try:
+            return app_main()
+        except Exception:
+            with log_path.open('a', encoding='utf-8', buffering=1) as log:
+                traceback.print_exc(file=log)
+            raise
     if log_path.exists() and log_path.stat().st_size > 2 * 1024 * 1024:
         log_path.replace(log_path.with_suffix('.previous.log'))
     with log_path.open('a', encoding='utf-8', buffering=1) as log:
@@ -45,16 +55,20 @@ def main():
         sys.stdout = sys.stderr = log
         try:
             print('\n[启动]', datetime.now().isoformat(timespec='seconds'))
-            sys.argv = [str(root / 'src' / 'pet.py'), '--show-chat']
             if getattr(sys, 'frozen', False):
                 # PyInstaller stores Python modules in its embedded archive.
                 # Importing the real entry point keeps the frozen build from
                 # depending on a loose src/pet.py file at runtime.
                 _prepare_frozen_dlls()
-                from pet import main as pet_main
-                pet_main()
+                from app_entry import main as app_main
+                return_code = app_main()
+                if return_code:
+                    raise SystemExit(return_code)
             else:
-                runpy.run_path(sys.argv[0], run_name='__main__')
+                from app_entry import main as app_main
+                return_code = app_main()
+                if return_code:
+                    raise SystemExit(return_code)
         except SystemExit:
             raise
         except Exception:
@@ -70,4 +84,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

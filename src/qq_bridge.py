@@ -49,6 +49,7 @@ import sys
 import threading
 import time
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -113,6 +114,19 @@ MAX_PENDING = 5
 HIST_MAX = 12               # 每个会话留几条
 HIST_TTL_MIN = 30           # 超过这么久没说话就当换了话题
 HIST_FILE = M.ROOT / "data" / "qq_history.json"
+
+
+@dataclass(frozen=True)
+class DeliveryReceipt:
+    """平台出站结果；只有 accepted 才能进入已发送历史。"""
+
+    status: str
+    text: str = ""
+    response: dict | None = None
+
+    @property
+    def accepted(self) -> bool:
+        return self.status == "accepted"
 
 # 不回复的低信息量消息
 IGNORE_EXACT = {"", "。", ".", "？", "?", "！", "!", "…", "。。。", "test"}
@@ -308,11 +322,11 @@ def build_system(ev: QB.QQEvent) -> tuple[str, dict]:
     import thinking as T
 
     level = GROUP_LEVEL if ev.scene == "group" else C2C_LEVEL
-    # 让记忆检索用上这个档位的预算（和桌宠那条路一致）
-    T.apply_to_memory(level, ev.content)
+    # 让这一轮记忆检索用上这个档位的预算，不改变进程级配置。
+    options = T.apply_to_memory(level, ev.content)
 
     persona = M.persona_text()
-    ctx = M.build_context(ev.content)
+    ctx = M.build_context(ev.content, retrieval=options["retrieval"])
 
     platform = (
         "## 你现在在 QQ 上说话\n\n"
@@ -694,15 +708,17 @@ class Bridge:
         # 认领优先，别拿去喂模型
         c = claim_reply(ev, who)
         if c is not None:
-            self._send(ev, c)
-            hist_append(conv_key(ev), "assistant", "", c)
+            receipt = self._send(ev, c)
+            if receipt.accepted:
+                hist_append(conv_key(ev), "assistant", "", receipt.text)
             return
 
         # 指令口。也排在喂模型前面 —— 指令不是聊天内容。
         c = command_reply(ev, who)
         if c is not None:
-            self._send(ev, c)
-            hist_append(conv_key(ev), "assistant", "", c)
+            receipt = self._send(ev, c)
+            if receipt.accepted:
+                hist_append(conv_key(ev), "assistant", "", receipt.text)
             return
 
         # 带图的消息正文可能是空的，别拿"低信息量"把它误杀
@@ -762,11 +778,13 @@ class Bridge:
         # ★ 回话内容也写日志。之前只记了字数，出了问题根本看不到
         #   她到底说了什么 —— 排查"逻辑不通"的时候两眼一抹黑。
         log(f"想了 {took:.1f} 秒，回 {len(reply)} 字：{reply[:120]}")
-        self._send(ev, reply)
-        hist_append(conv_key(ev), "assistant", "", reply)
+        receipt = self._send(ev, reply)
+        if not receipt.accepted:
+            return
+        hist_append(conv_key(ev), "assistant", "", receipt.text)
 
         # ── 记 ──
-        self._remember(ev, who, reply)
+        self._remember(ev, who, receipt.text)
         self._log_mood(ev)
 
     def _log_mood(self, ev: QB.QQEvent) -> None:
@@ -777,18 +795,27 @@ class Bridge:
         except Exception as e:
             log(f"mood 日志出错：{type(e).__name__}: {e}")
 
-    def _send(self, ev: QB.QQEvent, text: str) -> None:
+    def _send(self, ev: QB.QQEvent, text: str) -> DeliveryReceipt:
         clean, notes = QT.sanitize(text)
         if not clean:
             log("清洗后没内容了，不发")
-            return
+            return DeliveryReceipt("skipped", response={"_skipped": "清洗后没内容了"})
         if notes:
             log(f"出站清洗：{'、'.join(notes)}")
         r = QB.reply(ev, clean)
-        if r.get("_error") or r.get("_skipped"):
+        if r.get("_skipped"):
             log(f"发送失败：{r}")
+            return DeliveryReceipt("skipped", clean, r)
+        if r.get("_error"):
+            # 网络错误时请求是否已经到达平台未知，不能把它当作可安全重发的失败。
+            log(f"发送结果未知：{r}")
+            return DeliveryReceipt("unknown", clean, r)
+        if r.get("_http_error"):
+            log(f"平台拒绝发送：{r}")
+            return DeliveryReceipt("failed", clean, r)
         else:
             log("已回复")
+            return DeliveryReceipt("accepted", clean, r)
 
     def _remember(self, ev: QB.QQEvent, who: dict, reply: str) -> None:
         """落盘。主人的话进记忆库，群友的话只进人物卡的临时笔记。"""

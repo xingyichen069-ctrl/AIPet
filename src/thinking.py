@@ -188,17 +188,19 @@ def resolve(query: str | None = None, level: str | None = None) -> dict:
 
 def apply_to_memory(level: str | None = None, query: str | None = None) -> dict:
     """
-    把当前档位的记忆参数写进 memory 的运行时配置。
+    解析当前档位并返回本轮记忆参数。
 
-    这是「思考强度」和「记忆系统」的连接点——
-    调到深究，它真的会去翻更多旧账；调到省电，它只看最近几条。
+    这是「思考强度」和「记忆系统」的连接点。参数属于这一轮请求，
+    不写回 memory 的全局配置，避免并发请求互相污染。
     """
     r = resolve(query, level)
     p = r["params"]
-    M.CFG["retrieval"]["token_budget"] = p["memory_budget"]
-    M.CFG["retrieval"]["max_entries"] = p["memory_entries"]
-    M.CFG["retrieval"]["recency_floor"] = p.get("memory_floor", 4)
-    return r
+    return {**r, "retrieval": {
+        "token_budget": p["memory_budget"],
+        "max_entries": p["memory_entries"],
+        "recency_floor": p.get("memory_floor", 4),
+        "min_score": M.CFG["retrieval"].get("min_score", 0.05),
+    }}
 
 
 # ---------------------------------------------------------------- 提示块
@@ -243,7 +245,8 @@ def system_block(query: str | None = None, level: str | None = None) -> str:
 def context(query: str, level: str | None = None) -> str:
     """思考强度块 + 记忆块，一次给全。"""
     r = apply_to_memory(level, query)
-    return system_block(query, r["level"]) + "\n\n" + M.build_context(query)
+    return system_block(query, r["level"]) + "\n\n" + M.build_context(
+        query, retrieval=r["retrieval"])
 
 
 # ---------------------------------------------------------------- CLI

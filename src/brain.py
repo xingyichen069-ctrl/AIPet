@@ -216,8 +216,9 @@ def build_system(query: str, level: str | None = None) -> tuple[str, dict]:
 
     system = 人格设定 + 思考强度指令 + 记忆（关系状态/相关回忆/用户档案）
     """
-    r = T.apply_to_memory(level, query)      # 这一步让 memory 用上当前档位的预算
-    body = T.system_block(query, r["level"]) + "\n\n" + M.build_context(query)
+    r = T.apply_to_memory(level, query)
+    body = T.system_block(query, r["level"]) + "\n\n" + M.build_context(
+        query, retrieval=r["retrieval"])
     body += ("\n\n## 产物任务\n"
              "当用户明确要求你实际写程序、运行代码、生成图片、报告或文件，"
              "或者要求反复调试一个可交付结果时，调用 code_task 交给后台执行；"
@@ -315,7 +316,8 @@ def _explain(e: Exception) -> str:
 def stream(query: str, history: list[dict] | None = None,
            level: str | None = None, cancelled=None,
            system: str | None = None, max_tokens: int | None = None,
-           block_tools: set[str] | None = None):
+           block_tools: set[str] | None = None,
+           allowed_tools: set[str] | None = None):
     """
     流式生成。产出 (类型, 文本)：
         ("level", 档位信息)  —— 只产一次，最先
@@ -340,9 +342,10 @@ def stream(query: str, history: list[dict] | None = None,
     #   发到校外服务器，不能让群里的人靠一句话就把谁的文件送出去。
     #   在**调用之前**摘掉，不是调用之后拦：模型看不见这个工具，
     #   就不会写出针对它的调用，也不会因为"我明明有这个工具"而反复试。
-    if block_tools and payload.get("tools"):
-        payload["tools"] = [t for t in payload["tools"]
-                            if t["function"]["name"] not in block_tools]
+    policy = LT.make_policy(blocked_tools=block_tools,
+                            allowed_tools=allowed_tools) if LT else None
+    if policy and payload.get("tools"):
+        payload["tools"] = policy.visible(payload["tools"])
         if not payload["tools"]:
             payload.pop("tools", None)
 
@@ -458,7 +461,8 @@ def stream(query: str, history: list[dict] | None = None,
             shown = ", ".join(f"{k}={v!r}" for k, v in args.items())
             yield ("tool", f"⚙ {s['name']}({shown})")
 
-            result = LT.call(s["name"], args) if LT else "工具模块未加载"
+            result = (LT.call(s["name"], args, policy=policy)
+                      if LT else "工具模块未加载")
             first = result.strip().splitlines()[0] if result.strip() else "(空)"
             yield ("tool", f"  → {first[:120]}")
 
@@ -510,6 +514,7 @@ def ask_with_system(query: str, system: str,
                     level: str | None = None,
                     max_tokens: int | None = None,
                     block_tools: set[str] | None = None,
+                    allowed_tools: set[str] | None = None,
                     cancelled=None) -> tuple[str, str, dict]:
     """
     自带 system 地问一次。返回 (正文, 思维链, 档位信息)。
@@ -524,7 +529,8 @@ def ask_with_system(query: str, system: str,
 
     for kind, val in stream(query, history, level,
                             system=system, max_tokens=max_tokens,
-                            block_tools=block_tools, cancelled=cancelled):
+                            block_tools=block_tools, allowed_tools=allowed_tools,
+                            cancelled=cancelled):
         if kind == "content":
             text.append(val)
         elif kind == "reasoning":

@@ -38,6 +38,7 @@ import shutil
 import subprocess
 import sys
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -63,6 +64,34 @@ def bind_context(**values):
 
 def tool_context() -> dict:
     return dict(_TOOL_CONTEXT.get() or {})
+
+
+@dataclass(frozen=True)
+class ToolPolicy:
+    """同一份工具授权同时约束展示和执行。"""
+
+    allowed: frozenset[str] | None = None
+
+    def allows(self, name: str) -> bool:
+        return self.allowed is None or name in self.allowed
+
+    def visible(self, specs: list[dict]) -> list[dict]:
+        if self.allowed is None:
+            return list(specs)
+        return [spec for spec in specs
+                if spec.get("function", {}).get("name") in self.allowed]
+
+
+def make_policy(blocked_tools: set[str] | None = None,
+                allowed_tools: set[str] | None = None) -> ToolPolicy:
+    """从可信调用上下文生成策略；模型参数不会参与授权。"""
+    if blocked_tools is None and allowed_tools is None:
+        return ToolPolicy()
+    known = {spec.get("function", {}).get("name") for spec in SPECS}
+    names = set(allowed_tools) if allowed_tools is not None else known
+    names &= known
+    names -= set(blocked_tools or ())
+    return ToolPolicy(frozenset(names))
 
 if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("-", "") != "utf8":
     try:
@@ -157,8 +186,8 @@ def recall(query: str, limit: int = 8) -> str:
     """检索记忆库。想知道"用户以前说过什么"时用。"""
     try:
         import thinking as T
-        T.apply_to_memory(query)
-        hits = M.retrieve(query, top_k=int(limit))
+        options = T.apply_to_memory(query=query)
+        hits = M.retrieve(query, top_k=int(limit), retrieval=options["retrieval"])
         if not hits:
             return "（没找到相关记忆）"
         return "\n".join(
@@ -946,7 +975,13 @@ DISPATCH = {
 }
 
 
-def call(name: str, args: dict) -> str:
+def call(name: str, args: dict, *, policy: ToolPolicy | None = None,
+         allowed_tools: set[str] | None = None) -> str:
+    policy = policy or tool_context().get("tool_policy")
+    if policy is None and allowed_tools is not None:
+        policy = make_policy(allowed_tools=allowed_tools)
+    if policy is not None and not policy.allows(name):
+        return f"工具未获本轮授权：{name}"
     fn = DISPATCH.get(name)
     if fn is None:
         return f"未知工具：{name}"

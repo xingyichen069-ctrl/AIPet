@@ -22,7 +22,7 @@ class Services(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(dir=work)
         self.root = Path(self.tmp.name)
         (self.root / 'data').mkdir()
-        shutil.copyfile(PROJECT / 'data/config.json', self.root / 'data/config.json')
+        shutil.copyfile(PROJECT / 'data/config.example.json', self.root / 'data/config.json')
         self.old_root = M.ROOT
         M.ROOT = self.root
         self.store = C.Store(self.root)

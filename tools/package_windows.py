@@ -15,13 +15,13 @@ package is installed.
 from __future__ import annotations
 
 import argparse
+import hashlib
 from importlib import metadata
 import json
 from pathlib import Path
 import shutil
 import subprocess
 import sys
-import os
 from packaging.requirements import Requirement
 
 
@@ -40,11 +40,10 @@ SKIP_DISTRIBUTIONS = {
     "setuptools", "pip", "wheel",
 }
 
-PROJECT_DIRECTORIES = ("src", "tools", "assets", "themes", "hiyori_zh-Hans")
+PROJECT_DIRECTORIES = ("src", "assets", "themes", "hiyori_zh-Hans")
 PROJECT_FILES = (
     "VERSION", "requirements.txt", "README.md", "CHANGELOG.md",
-    "Windows使用说明.md", "新增功能说明.md", "启动桌宠.bat", "停止桌宠.bat",
-    "启动QQ.bat", "停止QQ.bat", "启动诊断.bat", "查看状态.bat",
+    "Windows使用说明.md", "新增功能说明.md",
 )
 
 
@@ -95,7 +94,8 @@ def _copy_base_python(runtime: Path) -> None:
         ignored = set()
         for name in names:
             rel = relative / name
-            if name == "__pycache__" or name in {"Doc", "include", "Scripts", "share"}:
+            if (name == "__pycache__" or name.lower().endswith(".bat")
+                    or name in {"Doc", "include", "Scripts", "share"}):
                 ignored.add(name)
             elif rel == Path("Lib") / "site-packages":
                 ignored.add(name)
@@ -129,16 +129,13 @@ def _copy_runtime_distributions(runtime: Path) -> list[str]:
 
 
 def _copy_project_files(bundle: Path) -> None:
-    def ignore_generated(source: str, names: list[str]) -> set[str]:
-        return {
-            name for name in names
-            if name == "__pycache__" or name == ".pytest_cache"
-            or name.endswith(".pyc")
-        }
     for name in PROJECT_DIRECTORIES:
         source = ROOT / name
         if source.is_dir():
-            shutil.copytree(source, bundle / name, ignore=ignore_generated, dirs_exist_ok=True)
+            shutil.copytree(
+                source, bundle / name, dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+            )
     for name in PROJECT_FILES:
         source = ROOT / name
         if source.is_file():
@@ -178,24 +175,17 @@ def _build_launcher() -> Path:
     shutil.copy2(ROOT / "tools" / "aipet_launcher.rc", resource)
     shutil.copy2(ROOT / "assets" / "character.ico", icon)
     vcvars = _find_vcvars()
+    command = (
+        f'call "{vcvars}" >nul && '
+        'rc /nologo /r /fo aipet_launcher.res aipet_launcher.rc && '
+        'cl /nologo /O2 /MT /DUNICODE /D_UNICODE /W3 '
+        '/Fe:AIPet.exe aipet_launcher.c aipet_launcher.res user32.lib'
+    )
     # Passing a list makes subprocess escape the quotes in the batch-file
     # path as literal ``\\\"`` characters on Windows.  shell=True delegates
     # to cmd.exe and preserves the normal ``call \"C:\\Program Files...\"``
     # syntax; every path here came from our own repository or vswhere.
-    rc_command = (
-        f'call "{vcvars}" >nul && '
-        'rc /nologo /fo aipet_launcher.res aipet_launcher.rc'
-    )
-    subprocess.run(rc_command, cwd=BUILD_ROOT, check=True, shell=True)
-    resource_output = BUILD_ROOT / "aipet_launcher.res"
-    if not resource_output.is_file():
-        raise RuntimeError("rc 没有生成 aipet_launcher.res。")
-    cl_command = (
-        f'call "{vcvars}" >nul && '
-        'cl /nologo /O2 /MT /DUNICODE /D_UNICODE /W3 '
-        '/Fe:AIPet.exe aipet_launcher.c aipet_launcher.res user32.lib'
-    )
-    subprocess.run(cl_command, cwd=BUILD_ROOT, check=True, shell=True)
+    subprocess.run(command, cwd=BUILD_ROOT, check=True, shell=True)
     launcher = BUILD_ROOT / "AIPet.exe"
     if not launcher.is_file():
         raise RuntimeError("Visual Studio 没有生成 AIPet.exe。")
@@ -205,11 +195,30 @@ def _build_launcher() -> Path:
 def _smoke_runtime(bundle: Path) -> None:
     python = bundle / "runtime" / "python.exe"
     code = "import PySide6, live2d.v3, ddgs; print('runtime imports ok')"
-    environment = os.environ.copy()
-    environment["PYTHONDONTWRITEBYTECODE"] = "1"
     subprocess.run([str(python), "-c", code], cwd=bundle, check=True,
                    capture_output=True, text=True, encoding="utf-8", errors="replace",
-                   timeout=90, env=environment)
+                   timeout=90)
+
+
+def _write_manifest(bundle: Path, copied: list[str]) -> None:
+    """Record the exact portable components for update and support checks."""
+    files = []
+    for path in sorted(p for p in bundle.rglob("*") if p.is_file()
+                       and p.name != "release-manifest.json"):
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        files.append({"path": str(path.relative_to(bundle)).replace("\\", "/"),
+                      "size": path.stat().st_size, "sha256": digest})
+    manifest = {
+        "format": 1,
+        "app": APP_NAME,
+        "version": (ROOT / "VERSION").read_text(encoding="utf-8").strip(),
+        "python": sys.version.split()[0],
+        "architecture": "64-bit" if sys.maxsize > 2**32 else "32-bit",
+        "runtime_files_copied": len(copied),
+        "files": files,
+    }
+    (bundle / "release-manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def build(force: bool = False) -> Path:
@@ -238,6 +247,7 @@ def build(force: bool = False) -> Path:
         encoding="utf-8",
     )
     _smoke_runtime(OUTPUT)
+    _write_manifest(OUTPUT, copied)
     print(f"已生成：{OUTPUT}")
     print(f"已复制 {len(copied)} 个运行时文件；代码任务和源码更新继续使用 bundled Python。")
     return OUTPUT

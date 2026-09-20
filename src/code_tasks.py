@@ -84,6 +84,13 @@ def _index_records() -> list[dict]:
     return [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
 
 
+def _revision(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 @contextlib.contextmanager
 def _index_lock():
     """跨桌面进程和 QQ 桥合并任务索引，避免互相覆盖。"""
@@ -126,6 +133,7 @@ class CodeTask:
     title: str = ""
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
+    revision: int = 0
     artifacts: list[str] = field(default_factory=list)
     last_reply: str = ""
     pending: deque[str] = field(default_factory=deque, repr=False)
@@ -143,6 +151,7 @@ class CodeTask:
             "title": self.title,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "revision": self.revision,
             "artifacts": list(self.artifacts),
             "event": _event_snapshot(self.event),
         }
@@ -154,6 +163,7 @@ class TaskManager:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._tasks: dict[str, CodeTask] = {}
+        self._dirty: set[str] = set()
         self._load()
 
     # ── 索引 ────────────────────────────────────────────────
@@ -178,30 +188,49 @@ class TaskManager:
                 title=str(item.get("title") or ""),
                 created_at=str(item.get("created_at") or _now()),
                 updated_at=str(item.get("updated_at") or _now()),
+                revision=_revision(item.get("revision", 0)),
                 artifacts=[str(x) for x in item.get("artifacts") or []][:MAX_ARTIFACTS],
             )
             self._tasks[task_id] = task
 
     def _persist(self) -> None:
         with self._lock:
-            local = {t.task_id: t.public() for t in self._tasks.values()}
-        try:
-            with _index_lock():
-                merged = {}
-                for item in _index_records():
-                    task_id = str(item.get("task_id") or "")
-                    if re.fullmatch(r"ct-[a-f0-9]{10}", task_id):
-                        merged[task_id] = item
-                merged.update(local)
-                body = sorted(merged.values(),
-                              key=lambda item: str(item.get("updated_at") or ""),
-                              reverse=True)[:MAX_PERSISTED_TASKS]
-                tmp = INDEX_FILE.with_suffix(".tmp")
-                tmp.write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
-                tmp.replace(INDEX_FILE)
-        except OSError:
-            # 任务本身仍可继续；状态索引只是恢复和查询的辅助。
-            pass
+            dirty = set(self._dirty)
+            if not dirty:
+                return
+            try:
+                with _index_lock():
+                    merged = {}
+                    for item in _index_records():
+                        task_id = str(item.get("task_id") or "")
+                        if re.fullmatch(r"ct-[a-f0-9]{10}", task_id):
+                            merged[task_id] = item
+
+                    persisted: set[str] = set()
+                    for task_id in dirty:
+                        task = self._tasks.get(task_id)
+                        if task is None:
+                            persisted.add(task_id)
+                            continue
+                        current = merged.get(task_id)
+                        current_revision = _revision((current or {}).get("revision", 0))
+                        if current is not None and current_revision != task.revision:
+                            # 另一个进程已基于更新版本写入；旧快照没有资格覆盖它。
+                            continue
+                        task.revision = current_revision + 1
+                        merged[task_id] = task.public()
+                        persisted.add(task_id)
+
+                    body = sorted(merged.values(),
+                                  key=lambda item: str(item.get("updated_at") or ""),
+                                  reverse=True)[:MAX_PERSISTED_TASKS]
+                    tmp = INDEX_FILE.with_suffix(".tmp")
+                    tmp.write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
+                    tmp.replace(INDEX_FILE)
+                    self._dirty.difference_update(persisted)
+            except OSError:
+                # 任务本身仍可继续；状态索引只是恢复和查询的辅助。
+                pass
 
     # ── 查询与权限 ──────────────────────────────────────────
     def _owned(self, task: CodeTask, ctx: dict) -> bool:
@@ -242,6 +271,7 @@ class TaskManager:
         task.pending.append(text)
         with self._lock:
             self._tasks[task_id] = task
+            self._dirty.add(task_id)
         self._persist()
         self._start_worker(task)
         return (f"已接下本地代码任务 {task_id}，我会在独立目录里执行并检查结果。"
@@ -265,6 +295,7 @@ class TaskManager:
                 task.notify = ctx.get("task_notify")
             task.pending.append(text)
             task.updated_at = _now()
+            self._dirty.add(task.task_id)
         self._persist()
         self._start_worker(task)
         return f"已把后续要求加入 {task.task_id}，会继续使用原来的任务目录。"
@@ -286,6 +317,7 @@ class TaskManager:
             task.state = "cancelled"
             task.updated_at = _now()
             tid = task.task_id
+            self._dirty.add(tid)
         self._persist()
         return f"已请求取消任务 {tid}。正在运行的那一步结束后会停止。"
 
@@ -309,6 +341,7 @@ class TaskManager:
             task.worker_started = True
             task.state = "queued"
             task.updated_at = _now()
+            self._dirty.add(task.task_id)
         threading.Thread(target=self._worker, args=(task,),
                          name=f"aipet-code-{task.task_id}", daemon=True).start()
 
@@ -322,14 +355,17 @@ class TaskManager:
                     if task.cancel_event.is_set():
                         task.state = "cancelled"
                         task.updated_at = _now()
+                        self._dirty.add(task.task_id)
                         cancelled = True
                     elif not task.pending:
                         task.updated_at = _now()
+                        self._dirty.add(task.task_id)
                         idle = True
                     else:
                         instruction = task.pending.popleft()
                         task.state = "running"
                         task.updated_at = _now()
+                        self._dirty.add(task.task_id)
                 if cancelled:
                     self._persist()
                     with self._lock:
@@ -349,6 +385,7 @@ class TaskManager:
                         task.state = "cancelled"
                         task.last_reply = ""
                         task.updated_at = _now()
+                        self._dirty.add(task.task_id)
                     self._persist()
                     with self._lock:
                         task.worker_started = False
@@ -364,6 +401,7 @@ class TaskManager:
                     task.last_reply = clean[-1200:]
                     task.artifacts = self._artifacts(task)
                     task.updated_at = _now()
+                    self._dirty.add(task.task_id)
                 self._persist()
 
                 if info.get("error") and not clean:
@@ -371,6 +409,7 @@ class TaskManager:
                     with self._lock:
                         task.state = "failed"
                         task.last_reply = clean
+                        self._dirty.add(task.task_id)
                     self._persist()
                 if clean:
                     self._send_text(task, f"任务 {task.task_id}：\n{clean}")
@@ -380,6 +419,7 @@ class TaskManager:
                 task.state = "failed"
                 task.last_reply = f"{type(e).__name__}: {e}"
                 task.updated_at = _now()
+                self._dirty.add(task.task_id)
             self._persist()
             with self._lock:
                 task.worker_started = False
