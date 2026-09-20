@@ -138,7 +138,8 @@ def news_latest(query: str, max_results: int = 8) -> str:
         import tools
         return tools.as_prompt_block(
             query, int(max_results), kind="news", max_chars=5000,
-            incremental=False, freshness="day", backend="google")
+            incremental=False, freshness="day",
+            backend=tools.TOOLS_CFG.get("search_backend", "ddgs"))
     except Exception as e:
         return f"新闻读取失败：{e}"
 
