@@ -21,6 +21,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import os
 from packaging.requirements import Requirement
 
 
@@ -128,10 +129,16 @@ def _copy_runtime_distributions(runtime: Path) -> list[str]:
 
 
 def _copy_project_files(bundle: Path) -> None:
+    def ignore_generated(source: str, names: list[str]) -> set[str]:
+        return {
+            name for name in names
+            if name == "__pycache__" or name == ".pytest_cache"
+            or name.endswith(".pyc")
+        }
     for name in PROJECT_DIRECTORIES:
         source = ROOT / name
         if source.is_dir():
-            shutil.copytree(source, bundle / name, dirs_exist_ok=True)
+            shutil.copytree(source, bundle / name, ignore=ignore_generated, dirs_exist_ok=True)
     for name in PROJECT_FILES:
         source = ROOT / name
         if source.is_file():
@@ -198,9 +205,11 @@ def _build_launcher() -> Path:
 def _smoke_runtime(bundle: Path) -> None:
     python = bundle / "runtime" / "python.exe"
     code = "import PySide6, live2d.v3, ddgs; print('runtime imports ok')"
+    environment = os.environ.copy()
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
     subprocess.run([str(python), "-c", code], cwd=bundle, check=True,
                    capture_output=True, text=True, encoding="utf-8", errors="replace",
-                   timeout=90)
+                   timeout=90, env=environment)
 
 
 def build(force: bool = False) -> Path:
