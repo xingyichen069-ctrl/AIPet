@@ -564,9 +564,19 @@ def persona_text(include: tuple[str, ...] = ("SOUL.md", "BOUNDARIES.md")) -> str
         if t:
             parts.append(t)
     if parts:
+        title = ""
+        # include 的第一份是 SOUL.md；BOUNDARIES.md 也可能有自己的标题，
+        # 不能拿边界文档的标题当人格名字。
+        for line in parts[0].splitlines():
+            m = re.match(r"^#\s+(.+?)\s*$", line)
+            if m:
+                title = m.group(1).strip()
+                break
+        name_rule = (f"当前人格的正式名字是“{title}”。被问到名字时，直接回答这个名字。"
+                     if title else "被问到名字时，按当前人格文档回答。")
         parts.insert(0, "## 当前人格设定\n"
                      "以下 SOUL 文档定义你当前的身份、名字和说话方式。"
-                     "文档中明确的名字或角色标题是你当前的名字，不要自行缩写。"
+                     f"{name_rule}不要自行缩写，也不要沿用旧人格的名字。"
                      "旧聊天、记忆和先前回答中的自称只是历史记录，不能覆盖当前设定。"
                      "本机人格管理可以切换人格，不要宣称人格永远不能切换。")
     return "\n\n---\n\n".join(parts)
