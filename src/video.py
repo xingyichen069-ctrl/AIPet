@@ -179,22 +179,26 @@ def _bilibili_comments(url: str, limit: int) -> tuple[list[dict], list[dict]]:
     if not m:
         return [], []
     base = "https://api.bilibili.com/x/web-interface/view?bvid=" + urllib.parse.quote(m.group(1))
-    req = urllib.request.Request(base, headers={"User-Agent": "Mozilla/5.0"})
+    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.bilibili.com/"}
+    req = urllib.request.Request(base, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
             aid = json.loads(r.read().decode("utf-8")).get("data", {}).get("aid")
         if not aid:
             return [], []
-        def get(sort: int) -> list[dict]:
-            u = f"https://api.bilibili.com/x/v2/reply?type=1&oid={aid}&sort={sort}&ps={max(1, limit)}"
-            rr = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"})
+        def get(mode: int) -> list[dict]:
+            # Bilibili 已逐步迁移到 /reply/main：mode=3 热门，mode=2 最新。
+            # 旧的 /reply?sort=0 在不少视频上会返回空数组。
+            u = (f"https://api.bilibili.com/x/v2/reply/main?next=0&type=1"
+                 f"&oid={aid}&mode={mode}&plat=1")
+            rr = urllib.request.Request(u, headers=headers)
             with urllib.request.urlopen(rr, timeout=15) as x:
                 rows = json.loads(x.read().decode("utf-8")).get("data", {}).get("replies") or []
             return [_normal_comment({"text": z.get("content", {}).get("message"),
                                      "author": z.get("member", {}).get("uname"),
                                      "like": z.get("like"), "reply_count": z.get("rcount"),
                                      "ctime": z.get("ctime")}, "bilibili") for z in rows]
-        return get(2), get(0)
+        return get(3)[:limit], get(2)[:limit]
     except Exception:
         return [], []
 
