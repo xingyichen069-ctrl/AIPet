@@ -293,6 +293,29 @@ def build_prompt(ev: QB.QQEvent, who: dict) -> str:
     return "\n".join(parts)
 
 
+# 兼容接口有时会把“实时比分”直接当成普通聊天，不发起 web_search 工具调用。
+# 这类问题不能靠模型自觉补救：先在桥接层检索，再让模型负责整理结果。
+_SEARCH_INTENT = re.compile(
+    r"实时|即时|比分|赛况|赛程|最新|刚刚|今天.*(比赛|新闻|天气|价格)|"
+    r"新闻|天气|股价|汇率|票价|公告")
+
+
+def prefetch_search(query: str) -> tuple[str, bool]:
+    """为明显的时效性问题预取搜索结果，返回 (结果, 是否成功)。"""
+    if not _SEARCH_INTENT.search(query or ""):
+        return "", False
+    try:
+        import local_tools as LT
+        kind = "news" if re.search(r"新闻|最新|刚刚|实时|比分|赛况", query) else "text"
+        result = LT.web_search(query, kind=kind, max_results=5)
+        if not result or result.startswith("搜索失败"):
+            return "", False
+        return result, True
+    except Exception as e:
+        log(f"预取搜索失败：{type(e).__name__}: {e}")
+        return "", False
+
+
 def build_system(ev: QB.QQEvent) -> tuple[str, dict]:
     """
     人格 + 记忆 + 平台约束。
@@ -320,7 +343,9 @@ def build_system(ev: QB.QQEvent) -> tuple[str, dict]:
         "代码层面还有一道兜底会再洗一遍，但被洗过的消息会缺东西，"
         "不如你自己就别写。\n\n"
         "★ 短不等于敷衍。把一件事**说清楚**比说得多重要 ——"
-        "该给的理由给完，然后停。"
+        "该给的理由给完，然后停。\n\n"
+        "★ 遇到实时、最新、比分、赛况、新闻、天气或价格问题，必须使用"
+        " web_search；只有工具明确失败时，才能说查不到。不要凭空说联网后端没装好。"
     )
 
     system = "\n\n---\n\n".join(p for p in [persona, ctx, platform] if p)
@@ -724,12 +749,23 @@ class Bridge:
             return
 
         prompt = build_prompt(ev, who)
+        # 对明显的实时问题先查一次，避免兼容接口漏掉工具调用。
+        prefetched, searched = prefetch_search(ev.content)
+        if searched:
+            prompt += ("\n\n## 刚刚查到的联网结果\n"
+                       "下面是程序刚刚检索到的资料。只根据这些资料回答；"
+                       "资料没有明确比分就直说没有查到，不要编造。\n"
+                       + prefetched)
         try:
             # ★ 非主人不给 see_image。那个工具会把整个文件 base64 之后
             #   发到 vision.py 配的那个服务（可能是外部的），群里任何人
             #   都不该有这个口子 —— 一句"看看 D:\某文件.png"就够把东西送出去。
             #   主人的记忆里有这条规矩，但记忆是说服，这里是拦。
-            blocked = None if who["is_owner"] else {"see_image"}
+            blocked = set() if who["is_owner"] else {"see_image"}
+            # 已经预取过就禁用第二次 web_search，避免浪费时间并让模型
+            # 又回到“后端不可用”的拒答模板。
+            if searched:
+                blocked.add("web_search")
             reply, _reasoning, info = B.ask_with_system(
                 prompt, system,
                 level=meta["level"], max_tokens=budget,
