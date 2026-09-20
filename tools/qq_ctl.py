@@ -61,6 +61,8 @@ LOG = ROOT / "data" / "qq.log"
 _CANDIDATES = (
     ("runtime", "pythonw.exe"), ("runtime", "python.exe"),
     (".venv/Scripts", "pythonw.exe"), (".venv/Scripts", "python.exe"),
+    ("runtime", "pythonw"), ("runtime", "python"),
+    (".venv/bin", "pythonw"), (".venv/bin", "python"),
 )
 
 
