@@ -80,7 +80,7 @@
     "fs_root": "",
     "_fs_root": "她能读写的那个目录（沙箱根）。留空 = 用户主目录下的 AIPet 文件夹。填绝对路径即可改成任何地方 —— 这是最该按自己习惯设的一项。",
     "search_backend": "ddgs",
-    "_search_backend": "ddgs | tavily | searxng",
+    "_search_backend": "ddgs | google | tavily | searxng",
     "tavily_key": "",
     "_tavily_key": "填了才能用 tavily 后端。1000次/月免费，注册不需信用卡：tavily.com",
     "searxng_url": "",

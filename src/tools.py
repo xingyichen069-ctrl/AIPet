@@ -309,6 +309,47 @@ def _search_searxng(query: str, n: int, kind: str, freshness: str = "") -> list[
     } for x in data.get("results", [])[:n]]
 
 
+def _search_google(query: str, n: int, kind: str, freshness: str = "") -> list[dict]:
+    """Google News RSS 搜索；比 Google 网页页适合无浏览器的本地 agent。"""
+    import html
+    import urllib.parse
+    import urllib.request
+    import xml.etree.ElementTree as ET
+
+    q = query
+    if freshness in {"d", "day"}:
+        q += " when:1d"
+    elif freshness in {"w", "week"}:
+        q += " when:7d"
+    params = urllib.parse.urlencode({
+        "q": q, "hl": "zh-CN", "gl": "CN", "ceid": "CN:zh-Hans",
+    })
+    url = f"https://news.google.com/rss/search?{params}"
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        opener = __import__("proxy").opener_for_url(url)
+    except Exception:
+        opener = urllib.request.build_opener()
+    with opener.open(req, timeout=20) as r:
+        root = ET.fromstring(r.read())
+
+    out = []
+    for item in root.findall(".//item")[:max(1, int(n))]:
+        def clean(value: str | None) -> str:
+            value = html.unescape(value or "")
+            return re.sub(r"<[^>]+>", " ", value).strip()
+        out.append({
+            "title": clean(item.findtext("title")),
+            "url": item.findtext("link", ""),
+            "snippet": clean(item.findtext("description")),
+            "source": clean(item.findtext("source")),
+            "date": item.findtext("pubDate", ""),
+        })
+    if not out:
+        raise RuntimeError("Google News 没有返回结果")
+    return out
+
+
 # ---------------------------------------------------------------- 对外接口
 
 def _result_key(item: dict) -> str:
@@ -372,6 +413,10 @@ def search(query: str, max_results: int = 5, kind: str = "text",
         out = {"backend": backend, "answer": "",
                "results": (_search_searxng(prepared, max_results, kind, freshness)
                             if freshness else _search_searxng(prepared, max_results, kind)), "cached": False}
+    elif backend == "google":
+        out = {"backend": backend, "answer": "",
+               "results": _search_google(prepared, max_results, kind, freshness),
+               "cached": False}
     else:
         out = {"backend": "ddgs", "answer": "",
                "results": (_search_ddgs(prepared, max_results, kind, freshness)
@@ -433,11 +478,11 @@ def fetch(url: str, use_cache: bool = True) -> str:
 
 def as_prompt_block(query: str, max_results: int = 5, kind: str = "text",
                     max_chars: int = 1800, incremental: bool = True,
-                    freshness: str = "") -> str:
+                    freshness: str = "", backend: str | None = None) -> str:
     """给 LLM 用的紧凑格式。"""
     try:
-        r = search(query, max_results, kind, incremental=incremental,
-                   freshness=freshness)
+        r = search(query, max_results, kind, backend=backend,
+                   incremental=incremental, freshness=freshness)
     except Exception as e:
         return f"（搜索失败：{e}）"
 
