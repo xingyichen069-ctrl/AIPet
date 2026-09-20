@@ -4,7 +4,9 @@ from __future__ import annotations
 import math
 import sys
 import time
-from PySide6.QtCore import Qt, QTimer, Signal, QUrl, QRectF, QPointF, QByteArray, Slot
+from pathlib import Path
+from PySide6.QtCore import (Qt, QTimer, Signal, QUrl, QRectF, QPointF,
+                            QByteArray, Slot, QThread)
 from PySide6.QtGui import (QDesktopServices, QKeySequence, QShortcut, QTextCursor,
     QPainter, QColor, QPen, QPainterPath, QLinearGradient, QPalette, QFont)
 from PySide6.QtWidgets import (QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
@@ -321,6 +323,25 @@ class Composer(QPlainTextEdit):
         event.acceptProposedAction()
 
 
+class AttachmentWorker(QThread):
+    """Read image/document attachments away from the Qt GUI thread."""
+
+    done = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, path):
+        super().__init__()
+        self.path = str(path)
+
+    def run(self):
+        try:
+            self.done.emit(C.read_attachment(self.path))
+        except (ValueError, OSError) as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(f'{type(exc).__name__}: {exc}')
+
+
 class ChatWindow(QWidget):
     # 后台代码任务在独立线程运行；用 Qt signal 把进度安全地送回界面线程。
     task_update = Signal(str, str)  # (本地会话 id, 文本)
@@ -344,6 +365,7 @@ class ChatWindow(QWidget):
         self._save_timer.setInterval(250)
         self._save_timer.timeout.connect(self._flush_ui)
         self.worker = None
+        self.attachment_worker = None
         self.task_update.connect(self.on_task_update)
         self.attachment = None
         self.cur_reply = []
@@ -534,6 +556,8 @@ class ChatWindow(QWidget):
     def prepare_quit(self):
         self._closing_application = True
         self._flush_ui()
+        if self.attachment_worker and self.attachment_worker.isRunning():
+            self.attachment_worker.requestInterruption()
 
     def hideEvent(self, event):
         if self._ui_ready and not self._closing_application and not self.isMinimized():
@@ -647,6 +671,9 @@ class ChatWindow(QWidget):
     def busy(self):
         return bool(self.worker and self.worker.isRunning())
 
+    def attachment_busy(self):
+        return bool(self.attachment_worker and self.attachment_worker.isRunning())
+
     def restore(self):
         while self.msgs.count() > 1:
             w = self.msgs.takeAt(0).widget()
@@ -741,9 +768,9 @@ class ChatWindow(QWidget):
     def menu(self):
         menu = ThemeMenu(self.appearance, self, heading=True)
         a = menu.addAction('另起话题', self.new_topic)
-        a.setEnabled(not self.busy())
+        a.setEnabled(not (self.busy() or self.attachment_busy()))
         a = menu.addAction('以前的话题', self.old_topics)
-        a.setEnabled(not self.busy())
+        a.setEnabled(not (self.busy() or self.attachment_busy()))
         menu.addAction('查看约定', self.pet.companion.show_tasks)
         add_appearance_menu(menu, self.appearance, self.change_appearance)
         if self.store.focus():
@@ -758,7 +785,7 @@ class ChatWindow(QWidget):
             QMessageBox.information(self, '外观', '外观设置暂时无法保存，请稍后再试。')
 
     def new_topic(self):
-        if self.busy():
+        if self.busy() or self.attachment_busy():
             return
         self._flush_ui()
         self.store.session(new=True)
@@ -767,6 +794,8 @@ class ChatWindow(QWidget):
         self.add_bubble('新话题开始了。以前的对话仍可在菜单中找回。', 'sys')
 
     def old_topics(self):
+        if self.busy() or self.attachment_busy():
+            return
         sessions = self.store.sessions()
         labels = [time.strftime('%m-%d %H:%M', time.localtime(s['created'])) + '  ' + (s['title'] or '空话题')[:36] for s in sessions]
         if not labels:
@@ -791,17 +820,51 @@ class ChatWindow(QWidget):
             self.load_attachment(path)
 
     def load_attachment(self, path):
-        if self.busy():
+        if self.busy() or self.attachment_busy():
+            return
+        suffix = Path(path).suffix.lower()
+        if suffix in C.IMAGE_SUFFIX or suffix in {'.docx', '.doc'}:
+            self.attachment_btn.setText('正在读取材料…')
+            self.attachment_btn.show()
+            self.attach_btn.setEnabled(False)
+            self.attachment_worker = AttachmentWorker(path)
+            self.attachment_worker.done.connect(self._attachment_ready)
+            self.attachment_worker.failed.connect(self._attachment_failed)
+            self.attachment_worker.finished.connect(self._attachment_finished)
+            self.attachment_worker.start()
             return
         try:
-            self.attachment = C.read_attachment(path)
-            self.attachment_btn.setText('材料：' + self.attachment['name'] + '  ×')
-            self.attachment_btn.show()
-            self._flush_ui()
+            self._attachment_ready(C.read_attachment(path))
         except (ValueError, OSError) as e:
-            QMessageBox.information(self, '材料', str(e))
+            self._attachment_failed(str(e))
+
+    @Slot(object)
+    def _attachment_ready(self, attachment):
+        self.attachment = attachment
+        self.attachment_btn.setText('材料：' + self.attachment['name'] + '  ×')
+        self.attachment_btn.show()
+        self._flush_ui()
+
+    @Slot(str)
+    def _attachment_failed(self, message):
+        if self.attachment:
+            self.attachment_btn.setText('材料：' + self.attachment['name'] + '  ×')
+        else:
+            self.attachment_btn.hide()
+        if not self._closing_application:
+            QMessageBox.information(self, '材料', message)
+
+    @Slot()
+    def _attachment_finished(self):
+        worker = self.attachment_worker
+        self.attachment_worker = None
+        self.attach_btn.setEnabled(True)
+        if worker:
+            worker.deleteLater()
 
     def remove_attachment(self):
+        if self.attachment_busy():
+            return
         self.attachment = None
         self.attachment_btn.hide()
         self._flush_ui()
@@ -815,6 +878,8 @@ class ChatWindow(QWidget):
         event.acceptProposedAction()
 
     def send_or_stop(self):
+        if self.attachment_busy():
+            return
         if self.busy():
             self.stopping = True
             self.emblem.finish(success=False)
@@ -826,7 +891,7 @@ class ChatWindow(QWidget):
 
     def send(self):
         q = self.input.toPlainText().strip()
-        if self.busy() or (not q and not self.attachment):
+        if self.busy() or self.attachment_busy() or (not q and not self.attachment):
             return
         q = q or '请帮我解释这份材料。'
         if len(q) > 24000:

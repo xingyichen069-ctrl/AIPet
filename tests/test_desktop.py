@@ -418,6 +418,20 @@ class Desktop(unittest.TestCase):
         self.assertIn('测试材料正文', FakeWorker.queries[-1][0])
         self.assertIsNone(self.chat.attachment)
 
+    def test_document_attachment_is_read_off_the_gui_thread(self):
+        path = self.root / '材料.docx'
+        path.write_bytes(b'placeholder')
+        attachment = {'name': path.name, 'text': '后台读到的正文', 'image': False}
+        with patch.object(UI.C, 'read_attachment', return_value=attachment) as reader:
+            self.chat.load_attachment(path)
+            for _ in range(30):
+                APP.processEvents()
+                if self.chat.attachment == attachment:
+                    break
+                QTest.qWait(10)
+        self.assertEqual(self.chat.attachment, attachment)
+        reader.assert_called_once_with(str(path))
+
     def test_focus_changes_actual_visual_controller(self):
         self.chat.input.setPlainText('陪我写半小时')
         self.chat.send()
