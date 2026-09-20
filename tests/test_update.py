@@ -2,6 +2,7 @@ import json
 import hashlib
 import platform
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -160,6 +161,16 @@ class UpdateTests(unittest.TestCase):
             result = U.update("all-round", "branch", target)
             self.assertFalse(result["ok"])
             self.assertIn("完整发布包", result["error"])
+
+    def test_portable_worker_starts_in_isolated_python(self):
+        worker = Path(U.__file__).with_name("portable_update.py")
+        result = subprocess.run(
+            [sys.executable, "-I", str(worker), "--help"],
+            capture_output=True,
+        )
+        output = (result.stdout + result.stderr).decode("utf-8", errors="replace")
+        self.assertEqual(result.returncode, 0, output)
+        self.assertIn("AIPet", output)
 
 
 if __name__ == "__main__":

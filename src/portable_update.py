@@ -20,6 +20,12 @@ import time
 import uuid
 import zipfile
 
+# ``python -I script.py`` deliberately omits the script directory from
+# sys.path. The detached worker still needs only its own sibling module, so
+# add that exact directory explicitly instead of re-enabling ambient paths.
+MODULE_DIR = Path(__file__).resolve().parent
+if str(MODULE_DIR) not in sys.path:
+    sys.path.insert(0, str(MODULE_DIR))
 import update_lifecycle as lifecycle
 
 
