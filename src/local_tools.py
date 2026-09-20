@@ -37,6 +37,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -976,7 +977,8 @@ DISPATCH = {
 
 
 def call(name: str, args: dict, *, policy: ToolPolicy | None = None,
-         allowed_tools: set[str] | None = None) -> str:
+         allowed_tools: set[str] | None = None,
+         deadline: float | None = None) -> str:
     policy = policy or tool_context().get("tool_policy")
     if policy is None and allowed_tools is not None:
         policy = make_policy(allowed_tools=allowed_tools)
@@ -985,6 +987,19 @@ def call(name: str, args: dict, *, policy: ToolPolicy | None = None,
     fn = DISPATCH.get(name)
     if fn is None:
         return f"未知工具：{name}"
+    if deadline is not None:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return "工具未执行：本轮已超过截止时间。"
+        # run_python already has a subprocess timeout. Clamp it to the same
+        # request deadline so a tool cannot outlive the model turn.
+        args = dict(args or {})
+        if name == "run_python":
+            try:
+                requested = max(1, int(args.get("timeout", 120)))
+            except (TypeError, ValueError):
+                requested = 120
+            args["timeout"] = min(requested, max(1, int(left)))
     try:
         return fn(args or {})
     except Exception as e:

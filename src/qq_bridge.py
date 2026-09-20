@@ -742,6 +742,7 @@ class Bridge:
         if left <= 20:
             log(f"只剩 {left:.0f} 秒，来不及想了")
             return
+        deadline = time.monotonic() + left
 
         prompt = build_prompt(ev, who)
         try:
@@ -760,7 +761,8 @@ class Bridge:
                 reply, _reasoning, info = B.ask_with_system(
                     prompt, system,
                     level=meta["level"], max_tokens=budget,
-                    block_tools=blocked, options=meta.get("options"))
+                    block_tools=blocked, options=meta.get("options"),
+                    deadline=deadline)
         except Exception as e:
             log(f"brain 出错：{type(e).__name__}: {e}")
             return

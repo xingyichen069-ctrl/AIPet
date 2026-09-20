@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import time
 import unittest
 import zipfile
 from unittest.mock import patch
@@ -7,6 +8,7 @@ import test_companion as TC
 import companion as C
 import brain as B
 import backup as BK
+import local_tools as LT
 
 
 class Response:
@@ -48,6 +50,22 @@ class Integration(unittest.TestCase):
              patch.object(B, '_request') as request:
             list(B.stream('不要继续', cancelled=lambda: True))
         request.assert_not_called()
+
+    def test_deadline_prevents_provider_request(self):
+        payload = {'messages': [], 'max_tokens': 100}
+        with patch.object(B, 'api_key', return_value='test-key'), \
+             patch.object(B, 'build_payload', return_value=(payload, {})), \
+             patch.object(B, '_request') as request:
+            events = list(B.stream('已经过期', deadline=time.monotonic() - 1))
+        request.assert_not_called()
+        self.assertEqual(events[0][0], 'level')
+
+    def test_deadline_prevents_tool_dispatch(self):
+        called = []
+        with patch.dict(LT.DISPATCH, {'fake': lambda args: called.append(args) or 'ok'}, clear=False):
+            result = LT.call('fake', {}, deadline=time.monotonic() - 1)
+        self.assertIn('超过截止时间', result)
+        self.assertEqual(called, [])
 
     def test_backup_contains_consistent_conversations_and_agreements(self):
         self.store.add_message('user', '继续方案')

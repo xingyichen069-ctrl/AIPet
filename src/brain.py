@@ -85,6 +85,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -270,7 +271,7 @@ def build_payload(query: str, history: list[dict] | None = None,
 #  调用
 # ═══════════════════════════════════════════════════════════════
 
-def _request(payload: dict, key: str):
+def _request(payload: dict, key: str, timeout: float = 30):
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
         f"{base_url().rstrip('/')}/chat/completions",
@@ -282,7 +283,15 @@ def _request(payload: dict, key: str):
         },
         method="POST",
     )
-    return urllib.request.urlopen(req, timeout=30)
+    return urllib.request.urlopen(req, timeout=max(0.1, float(timeout)))
+
+
+def _deadline_expired(deadline: float | None) -> bool:
+    return deadline is not None and time.monotonic() >= deadline
+
+
+def _stopped(cancelled=None, deadline: float | None = None) -> bool:
+    return bool(cancelled and cancelled()) or _deadline_expired(deadline)
 
 
 def _explain(e: Exception) -> str:
@@ -311,7 +320,8 @@ def stream(query: str, history: list[dict] | None = None,
            system: str | None = None, max_tokens: int | None = None,
            block_tools: set[str] | None = None,
            allowed_tools: set[str] | None = None,
-           options: dict | None = None):
+           options: dict | None = None,
+           deadline: float | None = None):
     """
     流式生成。产出 (类型, 文本)：
         ("level", 档位信息)  —— 只产一次，最先
@@ -342,7 +352,7 @@ def stream(query: str, history: list[dict] | None = None,
     force_final = False
 
     while True:
-        if cancelled and cancelled():
+        if _stopped(cancelled, deadline):
             return
         body = {**payload, "messages": messages}
         if force_final:
@@ -356,7 +366,15 @@ def stream(query: str, history: list[dict] | None = None,
         calls: dict[int, dict] = {}          # index → {id, name, args}
 
         try:
-            resp = _request(body, key)
+            if deadline is None:
+                resp = _request(body, key)
+            else:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return
+                # Keep a stalled SSE read from overshooting the caller's
+                # deadline by the normal 30-second socket timeout.
+                resp = _request(body, key, timeout=min(5.0, left))
         except Exception as e:
             yield ("error", _explain(e))
             return
@@ -364,7 +382,7 @@ def stream(query: str, history: list[dict] | None = None,
         try:
             with resp:
                 for raw in resp:
-                    if cancelled and cancelled():
+                    if _stopped(cancelled, deadline):
                         return
                     line = raw.decode("utf-8", errors="replace").strip()
                     if not line or not line.startswith("data:"):
@@ -408,6 +426,9 @@ def stream(query: str, history: list[dict] | None = None,
             yield ("error", _explain(e))
             return
 
+        if _stopped(cancelled, deadline):
+            return
+
         if not calls:
             break                            # 没有工具调用 → 这就是最终回答
 
@@ -437,7 +458,7 @@ def stream(query: str, history: list[dict] | None = None,
         })
 
         for i, s in sorted(calls.items()):
-            if cancelled and cancelled():
+            if _stopped(cancelled, deadline):
                 return
             try:
                 args = json.loads(s["args"] or "{}")
@@ -446,8 +467,10 @@ def stream(query: str, history: list[dict] | None = None,
             shown = ", ".join(f"{k}={v!r}" for k, v in args.items())
             yield ("tool", f"⚙ {s['name']}({shown})")
 
-            result = (LT.call(s["name"], args, policy=policy)
+            result = (LT.call(s["name"], args, policy=policy, deadline=deadline)
                       if LT else "工具模块未加载")
+            if _stopped(cancelled, deadline):
+                return
             first = result.strip().splitlines()[0] if result.strip() else "(空)"
             yield ("tool", f"  → {first[:120]}")
 
@@ -465,7 +488,7 @@ def stream(query: str, history: list[dict] | None = None,
 
 
 def ask(query: str, history: list[dict] | None = None,
-        level: str | None = None) -> tuple[str, str, dict]:
+        level: str | None = None, deadline: float | None = None) -> tuple[str, str, dict]:
     """
     把流式结果收成整块。返回 (正文, 思维链, 档位信息)。
 
@@ -477,7 +500,7 @@ def ask(query: str, history: list[dict] | None = None,
     r: dict = {}
     tools_used: list[str] = []
 
-    for kind, val in stream(query, history, level):
+    for kind, val in stream(query, history, level, deadline=deadline):
         if kind == "content":
             text.append(val)
         elif kind == "reasoning":
@@ -501,7 +524,8 @@ def ask_with_system(query: str, system: str,
                     block_tools: set[str] | None = None,
                     allowed_tools: set[str] | None = None,
                     options: dict | None = None,
-                    cancelled=None) -> tuple[str, str, dict]:
+                    cancelled=None,
+                    deadline: float | None = None) -> tuple[str, str, dict]:
     """
     自带 system 地问一次。返回 (正文, 思维链, 档位信息)。
 
@@ -517,7 +541,7 @@ def ask_with_system(query: str, system: str,
                             system=system, max_tokens=max_tokens,
                             block_tools=block_tools, allowed_tools=allowed_tools,
                             options=options,
-                            cancelled=cancelled):
+                            cancelled=cancelled, deadline=deadline):
         if kind == "content":
             text.append(val)
         elif kind == "reasoning":
