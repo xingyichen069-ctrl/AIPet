@@ -109,7 +109,7 @@ def start(visible: bool = False) -> int:
         return 0
 
     py = _pythonc() if visible else _python()
-    if visible:
+    if visible and os.name == "nt":
         # 可见模式：开一个新窗口，能看日志也能 Ctrl+C
         subprocess.Popen(
             ["cmd", "/c", "start", "小日和 QQ", str(py), str(BRIDGE), "run"],
@@ -127,7 +127,7 @@ def start(visible: bool = False) -> int:
                 [str(py), str(BRIDGE), "run"],
                 cwd=str(ROOT), creationflags=flags,
                 stdin=nul_in, stdout=nul_out, stderr=nul_out,
-                close_fds=True)
+                close_fds=True, start_new_session=(os.name != "nt"))
 
     import time
     for _ in range(20):

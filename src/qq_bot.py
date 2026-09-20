@@ -103,6 +103,12 @@ def read_pid() -> int:
 
 def _alive(pid: int) -> bool:
     """这个进程还在吗。Windows 上没有 os.kill(pid, 0) 那套，用 tasklist。"""
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+            return True
+        except (ProcessLookupError, PermissionError, OSError):
+            return False
     import subprocess
     try:
         r = subprocess.run(
@@ -116,6 +122,12 @@ def _alive(pid: int) -> bool:
 
 
 def kill_pid(pid: int) -> bool:
+    if os.name != "nt":
+        try:
+            os.kill(pid, 15)
+            return True
+        except (ProcessLookupError, PermissionError, OSError):
+            return False
     import subprocess
     try:
         subprocess.run(
