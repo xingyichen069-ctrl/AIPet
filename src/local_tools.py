@@ -120,11 +120,14 @@ def get_system() -> str:
     return "\n".join(lines)
 
 
-def web_search(query: str, kind: str = "text", max_results: int = 5) -> str:
-    """联网搜索。需要时效性信息时用。kind 可以是 text 或 news。"""
+def web_search(query: str, kind: str = "text", max_results: int = 5,
+               incremental: bool = True, freshness: str = "") -> str:
+    """联网搜索。需要时效性信息时用。会自动提取关键词、去重并增量合并结果。"""
     try:
         import tools
-        return tools.as_prompt_block(query, int(max_results), kind)
+        return tools.as_prompt_block(query, int(max_results), kind,
+                                     incremental=bool(incremental),
+                                     freshness=freshness)
     except Exception as e:
         return f"搜索失败：{e}"
 
@@ -455,6 +458,32 @@ def see_image(path: str, question: str = "") -> str:
     return V.read(Path(raw).expanduser(), question)
 
 
+def video_read(path: str, ocr: bool = True, transcribe: bool = True,
+               max_frames: int = 4) -> str:
+    """读取沙箱内视频的元数据、旁挂字幕、画面文字和可选语音转写。"""
+    target, err = _sandbox(path)
+    if err:
+        return err
+    if target is None or not target.exists():
+        return f"没有这个视频：{path}"
+    try:
+        import video
+        result = video.inspect(target, bool(ocr), bool(transcribe), int(max_frames))
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"视频读取失败：{type(e).__name__}: {e}"
+
+
+def video_comments(source: str, hot_limit: int = 5, time_limit: int = 5) -> str:
+    """读取视频评论，分别返回按热度和按时间排序的少量评论。"""
+    try:
+        import video
+        return json.dumps(video.comments(source, int(hot_limit), int(time_limit)),
+                          ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"视频评论读取失败：{type(e).__name__}: {e}"
+
+
 # ═══════════════════════════════════════════════════════════════
 #  工具定义（OpenAI / DeepSeek 格式）
 # ═══════════════════════════════════════════════════════════════
@@ -492,6 +521,10 @@ SPECS = [
                              "description": "text 普通搜索，news 新闻"},
                     "max_results": {"type": "integer",
                                     "description": "返回几条，默认 5"},
+                    "incremental": {"type": "boolean",
+                                     "description": "是否与上次结果增量合并并去重，默认 true"},
+                    "freshness": {"type": "string",
+                                   "description": "时间范围提示，如 day、week、month；留空由后端决定"},
                 },
                 "required": ["query"],
             },
@@ -695,6 +728,44 @@ SPECS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "video_read",
+            "description":
+                f"读取沙箱内的视频文件（{_fs_root()}）。返回时长、编码、旁挂字幕；"
+                "有 ffmpeg/tesseract 时还会尝试识别画面文字，有可选 Whisper 时尝试语音转写。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "视频相对路径"},
+                    "ocr": {"type": "boolean", "description": "是否抽帧识别画面文字，默认 true"},
+                    "transcribe": {"type": "boolean", "description": "是否尝试语音转写，默认 true"},
+                    "max_frames": {"type": "integer", "description": "最多抽取几帧，默认 4"},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "video_comments",
+            "description":
+                "读取视频评论并分成两组：按点赞/回复热度排序，按发布时间排序。"
+                "本地视频可放同名 .comments.json；Bilibili URL 直接尝试公开接口；"
+                "YouTube 等平台需要 yt-dlp。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "视频路径或 URL"},
+                    "hot_limit": {"type": "integer", "description": "热度评论数量，默认 5"},
+                    "time_limit": {"type": "integer", "description": "时间评论数量，默认 5"},
+                },
+                "required": ["source"],
+            },
+        },
+    },
 ]
 
 from companion import SPECS as COMPANION_SPECS, tool_call as companion_tool_call
@@ -709,7 +780,8 @@ DISPATCH = {
     "get_time": lambda a: get_time(),
     "get_system": lambda a: get_system(),
     "web_search": lambda a: web_search(a.get("query", ""), a.get("kind", "text"),
-                                       a.get("max_results", 5)),
+                                       a.get("max_results", 5),
+                                       a.get("incremental", True), a.get("freshness", "")),
     "recall": lambda a: recall(a.get("query", ""), a.get("limit", 8)),
     "remember": lambda a: remember(a.get("text", ""), a.get("importance", 3),
                                    a.get("tags", ""), a.get("decay", "normal"),
@@ -721,6 +793,10 @@ DISPATCH = {
     "fs_mkdir": lambda a: fs_mkdir(a.get("path", "")),
     "see_image": lambda a: see_image(a.get("path", ""), a.get("question", "")),
     "keep_image": lambda a: keep_image(a.get("name", ""), a.get("dest", "")),
+    "video_read": lambda a: video_read(a.get("path", ""), a.get("ocr", True),
+                                        a.get("transcribe", True), a.get("max_frames", 4)),
+    "video_comments": lambda a: video_comments(a.get("source", ""),
+                                                a.get("hot_limit", 5), a.get("time_limit", 5)),
 }
 
 

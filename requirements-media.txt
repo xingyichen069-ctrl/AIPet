@@ -1,0 +1,6 @@
+# 可选媒体能力：基础视频元数据/字幕/OCR 依赖系统 ffmpeg、ffprobe、tesseract。
+# yt-dlp 负责 YouTube 等平台信息和评论；用户已有命令行版也可以直接用。
+yt-dlp>=2025.1.0
+# 语音转写二选一（模型较大，按需安装）：
+# faster-whisper>=1.1.0
+# openai-whisper>=20240930

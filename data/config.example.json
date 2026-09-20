@@ -87,6 +87,12 @@
     "_searxng_url": "自建 SearXNG 实例地址，如 http://localhost:8080",
     "proxy": "auto",
     "_proxy": "auto = 自动检测（读系统代理 + 扫常见端口 + 实际验证）。也可填死地址如 http://127.0.0.1:7890；填 off 则完全不用代理。检测详情：python src/proxy.py",
+    "proxy_domestic": false,
+    "_proxy_domestic": "false = 国内域名直连，减少绕行和 DNS 污染；true = 国内域名也走代理",
+    "domestic_domains": [],
+    "_domestic_domains": "留空使用内置国内域名列表；填数组可覆盖，例如 [\"example.cn\", \"example.com\"]",
+    "dns_diagnose": true,
+    "_dns_diagnose": "仅提供解析诊断，不擅自修改系统 DNS",
     "cache_ttl": {
       "_说明": "缓存秒数。省额度最有效的手段就是缓存——同一 query 不重复请求。",
       "general": 3600,
