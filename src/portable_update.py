@@ -33,7 +33,7 @@ MANIFEST = "release-manifest.json"
 ASSET_NAME = "AIPet-windows-x64.zip"
 MAX_PACKAGE_BYTES = 1024 * 1024 * 1024
 MAX_UNPACKED_BYTES = 2 * MAX_PACKAGE_BYTES
-PUBLIC_DIRS = {"src", "runtime", "assets", "themes", "hiyori_zh-Hans"}
+PUBLIC_DIRS = {"src", "runtime", "assets", "themes", "hiyori_zh-Hans", "harness", "plugins"}
 PUBLIC_FILES = {
     "AIPet.exe", "VERSION", "requirements.txt", "README.md", "CHANGELOG.md",
     "Windows使用说明.md", "新增功能说明.md", "使用说明.txt", MANIFEST,

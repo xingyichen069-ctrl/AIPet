@@ -171,6 +171,8 @@ AIPet/
 │   ├── update.py           检查并安装更新
 │   ├── mcp_server.py       MCP server
 │   └── ...
+├── harness/                独立插件生命周期应用
+├── plugins/                可发现的独立插件
 ├── persona/                人格（不在仓库，自己建）
 ├── memory/                 记忆库（不在仓库）
 ├── data/
@@ -187,6 +189,8 @@ AIPet/
 ├── tools/                  开发与打包辅助脚本
 └── AIPet.exe               统一启动、诊断、状态、QQ 和更新入口（便携版）
 ```
+
+插件接口和自动测试、打包、启用流程见 [独立插件接口](docs/插件接口.md)。当前自带的 `plugins/aipet-mcp` 只是把已有 MCP server 接入该生命周期，不会复制人格、记忆或密钥。
 
 ## 依赖
 

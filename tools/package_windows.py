@@ -40,7 +40,7 @@ SKIP_DISTRIBUTIONS = {
     "setuptools", "pip", "wheel",
 }
 
-PROJECT_DIRECTORIES = ("src", "assets", "themes", "hiyori_zh-Hans")
+PROJECT_DIRECTORIES = ("src", "assets", "themes", "hiyori_zh-Hans", "harness", "plugins")
 PROJECT_FILES = (
     "VERSION", "requirements.txt", "README.md", "CHANGELOG.md",
     "Windows使用说明.md", "新增功能说明.md",
