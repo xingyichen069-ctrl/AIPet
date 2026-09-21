@@ -1,0 +1,39 @@
+# 小日和 · Windows 便携版
+
+适用系统：Windows 10 / 11，64 位（x64）。
+
+## 怎么打开
+
+1. 把压缩包**完整解压**到一个可写的本地文件夹，例如 `D:\AIPet`。不要直接在压缩包里运行。
+2. 双击 **AIPet.exe**。便携包内置 Windows Python 与所需依赖，不用另外安装 Python。
+3. 桌宠和聊天框会打开；找不到人物时，从系统托盘选择“显示桌宠 / 恢复点击”。
+
+正常启动不会常驻命令窗口。聊天和联网查询仍需网络及原来的模型服务配置。
+
+聊天窗口右上角的“··· → 设置”是统一设置中心，可以编辑人格与用户档案、API key 和 Base URL、思考档位模型、主题字号、工具代理以及 QQ 凭据。
+
+如果你使用的是仓库内的便携 EXE，运行 `.venv\Scripts\python.exe tools\package_windows.py --force` 后双击 `dist\AIPet\AIPet.exe`。它自带 Python 运行时，不需要项目外的 Python；首次启动仍要在生成的 `data\secrets.json` 或环境变量中配置模型密钥。发布版的维护操作统一通过同一个入口完成：`AIPet.exe qq start|stop|restart|status`、`AIPet.exe status`、`AIPet.exe stop`、`AIPet.exe memory show`、`AIPet.exe prepare`、`AIPet.exe migrate`、`AIPet.exe diagnose` 和 `AIPet.exe update`。
+
+需要桌面入口时，右键 `AIPet.exe`，选择“发送到 → 桌面快捷方式”。
+
+## 迁移了什么
+
+- 最新代码、Live2D 模型与编辑源文件、东方昼夜界面、阴阳玉动效。
+- 模型服务配置、密钥、用户档案、人格、私人记忆、聊天记录、草稿及附件快照。
+- 历史资料、原版留档、原有备份和旧压缩包。
+- 本地 Git 版本历史、版本号和施工日志。
+- 独立的 Windows 运行环境 `runtime`，与 Mac 的环境分开。
+
+Apple 原生 Liquid Glass 仅用于 macOS；Windows 保留东方昼夜配色、圆角和渐变玻璃风格，不调用苹果专用接口。窗口位置会按 Windows 的屏幕范围恢复。
+
+## 启动失败时
+
+- 先确认已完整解压，文件夹可以写入文件。
+- 运行 `AIPet.exe diagnose` 查看环境诊断；正常启动入口的日志在 `data\cache\windows-startup.log`。
+- 如果系统缺少图形驱动或提示缺少系统运行库，按具体错误补齐；模型显示依赖显卡的 OpenGL 支持。
+
+本包是在 Mac 上组装并检查 Windows 文件与依赖的；完整 Windows 实机启动尚待验证。
+
+## 以后更新
+
+保留整套文件夹。更新日志见 `CHANGELOG.md`。外观可从“··· → 外观”即时调整，草稿和窗口布局会自动保存。不要用删除整个文件夹的方式更新，以免丢失本地资料。

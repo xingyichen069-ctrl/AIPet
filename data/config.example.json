@@ -1,0 +1,139 @@
+{
+  "_说明": "小日和的配置。改完保存即生效，不用重启。",
+  "retrieval": {
+    "_说明": "检索参数 —— 每次对话时，从记忆库里挑多少内容注入 prompt",
+    "token_budget": 1200,
+    "_token_budget": "记忆注入的硬上限。超了就按分数截断，防止 prompt 无限膨胀",
+    "max_entries": 12,
+    "_max_entries": "最多注入几条记忆",
+    "recency_floor": 4,
+    "_recency_floor": "无论分数高低，最近 N 条一定注入（保证短期连贯性）",
+    "min_score": 0.05,
+    "_min_score": "低于这个分数直接丢弃，避免注入噪音"
+  },
+  "speaker": {
+    "_说明": "说话人区分。群里别人说的话，绝不能被当成关于主人的事实。",
+    "owner_weight": 1.0,
+    "_owner_weight": "主人的记忆在检索里的权重倍数。1.0 = 不额外加成（它本来就是基准）",
+    "guest_weight": 0.45,
+    "_guest_weight": "外人记忆的权重倍数。调小 → 更不容易被检索到",
+    "known_guest_weight": 0.6,
+    "_known_guest_weight": "认得出来的群友（有 openid 的）。比陌生人高一档，但仍然低于主人。",
+    "guest_max_importance": 2,
+    "_guest_max_importance": "外人记忆的重要度上限。不管模型给它打几分，最高只能到这",
+    "known_guest_max_importance": 3,
+    "_known_guest_max_importance": "认得出来的群友的重要度上限。可以记慢衰减，但不永久——这些不是关于主人的事实。",
+    "guest_decay": 0.15,
+    "_guest_decay": "外人记忆的衰减系数。0.15 约等于半衰期 4.6 天 —— 群里闲聊一周后基本淡出",
+    "known_guest_decay": 0.06,
+    "_known_guest_decay": "认得出来的群友的衰减系数。0.06 约合半衰期 11.5 天。",
+    "mark_in_context": true,
+    "_mark_in_context": "在注入 prompt 时给外人记忆加「群里有人说的」前缀，防止模型张冠李戴"
+  },
+  "scoring": {
+    "_说明": "评分公式: score = 关键词匹配 × 重要度 × 时间衰减 × 标签加成",
+    "importance_floor": 0.5,
+    "_importance_floor": "重要度1的权重。重要度5固定为1.0",
+    "tag_bonus": 0.25,
+    "_tag_bonus": "命中查询标签时的额外加成",
+    "decay_lambda": {
+      "_说明": "衰减系数，越小衰减越慢。exp(-λ × 天数)",
+      "permanent": 0.0,
+      "_permanent": "永不衰减。用于生日、核心事实",
+      "slow": 0.004,
+      "_slow": "半衰期约173天。用于长期目标、稳定偏好",
+      "normal": 0.02,
+      "_normal": "半衰期约35天。用于日常事件"
+    }
+  },
+  "compression": {
+    "_说明": "分层压缩 —— 老记忆不是删除，是降采样",
+    "daily_to_weekly_after_days": 30,
+    "_daily_to_weekly": "超过30天的日记条目 → 压成周摘要",
+    "weekly_to_monthly_after_days": 180,
+    "_weekly_to_monthly": "超过180天的周摘要 → 压成月摘要",
+    "archive_originals": true,
+    "_archive_originals": "原始条目移到 archive/ 而不是删除，你随时能翻"
+  },
+  "privacy": {
+    "_说明": "隐私红线。命中这些模式的文本不会写入记忆库",
+    "blocked_patterns": [
+      "密码",
+      "password",
+      "passwd",
+      "密钥",
+      "secret",
+      "token",
+      "api_key",
+      "apikey",
+      "身份证",
+      "银行卡",
+      "信用卡",
+      "cvv",
+      "私钥",
+      "助记词"
+    ],
+    "_blocked_patterns": "包含这些词条的整句会被拒绝记录"
+  },
+  "tools": {
+    "_说明": "网络搜索配置。ddgs 免费无需 key；tavily 质量最好但需注册；searxng 需自建。",
+    "fs_root": "",
+    "_fs_root": "她能读写的那个目录（沙箱根）。留空 = 用户主目录下的 AIPet 文件夹。填绝对路径即可改成任何地方 —— 这是最该按自己习惯设的一项。",
+    "search_backend": "ddgs",
+    "_search_backend": "ddgs | tavily | searxng",
+    "tavily_key": "",
+    "_tavily_key": "填了才能用 tavily 后端。1000次/月免费，注册不需信用卡：tavily.com",
+    "searxng_url": "",
+    "_searxng_url": "自建 SearXNG 实例地址，如 http://localhost:8080",
+    "proxy": "auto",
+    "_proxy": "auto = 自动检测（读系统代理 + 扫常见端口 + 实际验证）。也可填死地址如 http://127.0.0.1:7890；填 off 则完全不用代理。检测详情：python src/proxy.py",
+    "cache_ttl": {
+      "_说明": "缓存秒数。省额度最有效的手段就是缓存——同一 query 不重复请求。",
+      "general": 3600,
+      "news": 900,
+      "page": 86400
+    }
+  },
+  "knowledge": {
+    "_说明": "本地知识库。详见 src/knowledge.py 顶部说明——多数情况下你不需要它。",
+    "enabled": false,
+    "_enabled": "默认关闭。等你确实有一批要反复查的私有资料时再打开",
+    "docs_dir": "knowledge",
+    "_docs_dir": "放资料的文件夹（相对 AIPet 根目录）",
+    "chunk_size": 600,
+    "_chunk_size": "每块目标字符数",
+    "max_chunks": 6,
+    "_max_chunks": "每次检索最多返回几块"
+  },
+  "live2d": {
+    "_说明": "Live2D 模型配置。enabled=false 就退回静态图片模式。",
+    "enabled": true,
+    "_enabled": "true 用 Live2D 模型，false 用 assets/character.png 静态图",
+    "model": "hiyori_zh-Hans/hiyori_pro/runtime/hiyori_pro_t11.model3.json",
+    "_model": "相对 AIPet 根目录。pro 版本比 free 多了 pose3 和 2 个动作，模型也是 2023 修订版",
+    "width": 260,
+    "height": 380,
+    "_size": "桌宠窗口尺寸（逻辑像素）。想让模型大一点就调这两个",
+    "zoom": 1.0,
+    "_zoom": "在自适应基础上再放大。1.0 是刚好铺满。>1 放大，<1 缩小",
+    "fps": 30,
+    "_fps": "刷新率。桌宠常驻，30 够了；嫌费电可以降到 20",
+    "auto_blink": true,
+    "auto_breath": true,
+    "_auto": "自动眨眼和呼吸。关掉会显得很死板",
+    "idle_group": "Idle",
+    "_idle_group": "待机动作组名。Hiyori 有 Idle/Flick/Tap 等",
+    "animate_thinking": true,
+    "_animate_thinking": "换思考档位时改变表情（眯眼、歪头）。这是把'思考强度'可视化的方式",
+    "hover_feedback": true,
+    "_hover_feedback": "鼠标悬停在角色身上时播一个动作。关掉就没反应了"
+  },
+  "paths": {
+    "journal": "memory/journal.jsonl",
+    "state": "memory/state.json",
+    "profile": "persona/PROFILE.md",
+    "summaries": "memory/summaries",
+    "archive": "memory/archive",
+    "view": "view/memory.html"
+  }
+}
