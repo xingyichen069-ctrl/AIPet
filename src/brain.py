@@ -398,8 +398,10 @@ def stream(query: str, history: list[dict] | None = None,
                 if left <= 0:
                     return
                 # Keep a stalled SSE read from overshooting the caller's
-                # deadline by the normal 30-second socket timeout.
-                resp = _request(body, key, timeout=min(5.0, left))
+                # deadline, while allowing the proxy enough time to finish
+                # the TLS handshake.  Five seconds was too short on macOS
+                # when the model endpoint was reached through a proxy.
+                resp = _request(body, key, timeout=min(30.0, left))
         except Exception as e:
             yield ("error", _explain(e))
             return

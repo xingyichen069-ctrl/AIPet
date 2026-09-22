@@ -18,10 +18,19 @@ REQUIREMENTS = ROOT / "requirements.txt"
 
 
 def _python(console: bool = False) -> Path:
-    candidates = (
-        ("runtime", "python.exe" if console else "pythonw.exe"),
-        (".venv/Scripts", "python.exe" if console else "pythonw.exe"),
-    )
+    if os.name == "nt":
+        candidates = (
+            ("runtime", "python.exe" if console else "pythonw.exe"),
+            (".venv/Scripts", "python.exe" if console else "pythonw.exe"),
+        )
+    else:
+        # macOS/Linux 源码版使用 .venv/bin；没有 pythonw，后台桥接
+        # 仍然可以用普通解释器配合 /dev/null 脱离终端运行。
+        candidates = (
+            ("runtime", "python"),
+            ("runtime/bin", "python"),
+            (".venv/bin", "python"),
+        )
     for directory, name in candidates:
         path = ROOT / directory / name
         if path.exists():
@@ -239,16 +248,19 @@ def qq_start() -> int:
     flags = (getattr(subprocess, "DETACHED_PROCESS", 0)
              | getattr(subprocess, "CREATE_NO_WINDOW", 0)
              | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
-    with open(os.devnull, "rb") as stdin, open(os.devnull, "wb") as stdout:
+    console_log = ROOT / "data" / "qq_console.log"
+    console_log.parent.mkdir(parents=True, exist_ok=True)
+    with open(os.devnull, "rb") as stdin, console_log.open("ab") as stdout:
         subprocess.Popen([str(py), str(BRIDGE), "run"], cwd=str(ROOT),
                          creationflags=flags, stdin=stdin, stdout=stdout,
-                         stderr=stdout, close_fds=True)
+                         stderr=stdout, close_fds=True,
+                         start_new_session=os.name != "nt")
     for _ in range(20):
         time.sleep(0.5)
         if QB.read_pid():
             print(f"QQ 桥已启动（PID {QB.read_pid()}）。")
             return 0
-    print(f"QQ 桥没有起来，请检查 {LOG}")
+    print(f"QQ 桥没有起来，请检查 {console_log}")
     return 1
 
 
@@ -259,11 +271,16 @@ def qq_stop() -> int:
     if not pid:
         print("QQ 桥本来就没在跑。")
         return 0
-    QB.kill_pid(pid)
+    if not QB.kill_pid(pid):
+        print(f"QQ 桥无法停止（PID {pid}）。")
+        return 1
     for _ in range(10):
         time.sleep(0.3)
         if not QB.read_pid():
             break
+    if QB.read_pid():
+        print(f"QQ 桥尚未退出（PID {pid}），请稍后再检查。")
+        return 1
     try:
         QB.PID_FILE.unlink()
     except OSError:

@@ -59,7 +59,7 @@ if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("
         pass
 
 THINKING_FILE = M.ROOT / "data" / "thinking.json"
-LEVELS = ["frugal", "daily", "serious", "deep", "max"]
+LEVELS = ["frugal", "daily", "serious", "deep", "max", "thunder"]
 
 _cache: dict = {"mtime": 0, "data": None}
 

@@ -104,8 +104,21 @@ def read_pid() -> int:
 
 
 def _alive(pid: int) -> bool:
-    """这个进程还在吗。Windows 上没有 os.kill(pid, 0) 那套，用 tasklist。"""
+    """这个进程还在吗。Windows 用 tasklist，macOS/Linux 用 os.kill。"""
     import subprocess
+    if pid <= 0:
+        return False
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            # 进程存在，但当前用户没有向它发信号的权限。
+            return True
+        except OSError:
+            return False
     try:
         r = subprocess.run(
             ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
@@ -119,6 +132,17 @@ def _alive(pid: int) -> bool:
 
 def kill_pid(pid: int) -> bool:
     import subprocess
+    if pid <= 0:
+        return False
+    if os.name != "nt":
+        try:
+            import signal
+            os.kill(pid, signal.SIGTERM)
+            return True
+        except ProcessLookupError:
+            return False
+        except OSError:
+            return False
     try:
         subprocess.run(
             ["taskkill", "/PID", str(pid), "/F"],
