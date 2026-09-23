@@ -82,43 +82,6 @@ def clear_cache() -> int:
 
 # ---------------------------------------------------------------- 后端
 
-# 没代理时，直连出去的后端全是 DNS 污染或超时，试到最后一个也是白试。
-# 实测挨个试完要 37 秒，给个预算早收。
-#
-# ★ 预算判在「下一次调用之前」，而单次调用最长能跑 8 秒左右，所以墙钟会超出
-#   预算一截。9 秒 = 放两次调用进得来，第三次被挡掉，实际收在 17 秒上下。
-#   写 15 反而更慢：第三次会卡着线溜进来，结果 25 秒。
-NO_PROXY_BUDGET = 9.0
-# 单次调用的 ddgs 超时。见下面 DDGS(**d_kw) 那里的说明：它不等于墙钟时间。
-NO_PROXY_TIMEOUT = 3
-
-# 认出「根本出不去」的那类异常。ddgs 把不同失败包成不同异常：
-#   DNSError / Timeout  → 域名被解析到别处、连不上，国内直连的典型特征
-# 这两种出现过，再说「无结果」就是误导 —— 是没通道，不是没结果。
-_BLOCKED_MARKS = ("dnserror", "timeout", "timed out", "connection",
-                  "ssl", "unreachable")
-
-
-def _blocked(tries: list[tuple[str, Exception]]) -> bool:
-    return any(any(m in (type(e).__name__ + str(e)).lower() for m in _BLOCKED_MARKS)
-               for _, e in tries)
-
-
-def _pick_error(tries: list[tuple[str, Exception]]) -> tuple[str, Exception]:
-    """
-    挑一句最说明问题的错误，不是最后一句。
-
-    ★ 后端链的末尾是 google / yahoo / mojeek，它们失败时报的是
-      "No results found." —— 信息量为零，却正好把前面真正的 DNSError 盖掉。
-      她那天就是这么转述的：「报回来的是『无结果』，不是超时，也不是连接
-      失败」，于是连她自己都判断不出是网络问题，只能让你来查。
-    """
-    for backend, e in tries:
-        if any(m in (type(e).__name__ + str(e)).lower() for m in _BLOCKED_MARKS):
-            return backend, e
-    return tries[-1] if tries else ("", RuntimeError(""))
-
-
 def _search_ddgs(query: str, n: int, kind: str) -> list[dict]:
     try:
         from ddgs import DDGS
@@ -139,32 +102,26 @@ def _search_ddgs(query: str, n: int, kind: str) -> list[dict]:
     except Exception:
         pass
 
-    tries: list[tuple[str, Exception]] = []
-    # ★ 没有代理时，直连出去的后端清一色 DNS 污染或超时，结果必然是失败 ——
-    #   而以前会老老实实挨个试完，实测 37 秒才报错。给个预算，到点就收。
-    deadline = None if kw.get("proxy") else time.monotonic() + NO_PROXY_BUDGET
-
     def run_chain(d, func_name: str, backends: list[str], kwargs: dict):
-        """依次试后端，返回第一个有结果的。全失败返回 None。"""
+        """依次试后端，返回第一个有结果的。全失败则返回 (None, 最后错误)。"""
+        last = None
         for backend in backends:
-            if deadline is not None and time.monotonic() > deadline:
-                break
             try:
-                got = getattr(d, func_name)(query, backend=backend, **kwargs)
+                fn = getattr(d, func_name)
+                got = fn(query, backend=backend, **kwargs)
                 if got:
-                    return got
+                    return got, None
             except Exception as e:
-                tries.append((backend, e))
-        return None
+                last = e
+        return None, last
 
-    # 后端顺序按国内可达性排的。
-    #
-    # ★ 「直连时 bing / google 可用」这句话是建仓之前测的、从旧代码里原样带进来的，
-    #   2026-09-20 在没有代理的真环境下复验 —— **已经不成立**：八个后端全失败，
-    #   连 bing 都报 startpage.com 的 DNSError（ddgs 9.16.0 的 bing 后端并不是
-    #   只连 bing）。ddgs 版本一直钉着 9.16.0 没动过，变的是网络环境：
-    #   那次测量本身就是在代理开着的时候做的。
-    #   所以下面两张表只在「有代理」时才有意义，没代理时全表皆输。
+    # 后端顺序按国内实测可达性排的，不是随便写的：
+    #   bing / google  → text 可用（实测通过）
+    #   brave / startpage → DNSError，典型的 DNS 污染特征
+    #   yahoo / mojeek → 网络不可达
+    #   duckduckgo → 返回空
+    # 把能用的排前面，省掉无谓的超时等待。
+    # 开了代理之后这些限制会变，届时可以调回 ["auto", ...]。
     has_proxy = bool(kw.get("proxy"))
     if has_proxy:
         # 有代理时实测所有后端都通，连 news 也恢复（原来是全线失败）。
@@ -172,35 +129,24 @@ def _search_ddgs(query: str, n: int, kind: str) -> list[dict]:
         news_chain = ["auto", "bing", "duckduckgo", "yahoo"]
         text_chain = ["auto", "bing", "duckduckgo", "google", "yahoo", "mojeek"]
     else:
-        # 没代理：全靠 deadline 早收，顺序只影响先撞到哪堵墙
+        # 直连时只有 bing / google 能用，其余会白等超时
         news_chain = ["bing", "duckduckgo", "auto"]
         text_chain = ["bing", "google", "auto", "duckduckgo", "mojeek"]
 
-    # 没代理时把 ddgs 自己的超时也收紧。
-    # ★ 它的 timeout 不是墙钟上限 —— 实测 timeout=3 实际要 8 秒、timeout=5 要 16 秒，
-    #   因为 bing 这个「后端」内部还会拐去 startpage / yahoo 重试。
-    #   不收紧的话，光是第一个后端就把 15 秒预算整个吃光。
-    d_kw = {} if has_proxy else {"timeout": NO_PROXY_TIMEOUT}
-    raw = None
-    with DDGS(**d_kw) as d:
+    raw, last_err = None, None
+    with DDGS() as d:
         if kind == "news":
-            raw = run_chain(d, "news", news_chain, kw)
+            raw, last_err = run_chain(d, "news", news_chain, kw)
             if raw is None:
                 # ddgs 的 news 后端在国内基本不通（实测英文超时、中文无结果）。
                 # 退回 text + 一周内的时间过滤，效果接近新闻且稳定得多。
-                raw = run_chain(d, "text", text_chain, {**kw, "timelimit": "w"})
+                kw_fallback = {**kw, "timelimit": "w"}
+                raw, last_err = run_chain(d, "text", text_chain, kw_fallback)
         else:
-            raw = run_chain(d, "text", text_chain, kw)
+            raw, last_err = run_chain(d, "text", text_chain, kw)
 
     if raw is None:
-        who, err = _pick_error(tries)
-        detail = f"{who}：{str(err)[:120]}" if who else "一个后端都没试成"
-        if not has_proxy and _blocked(tries):
-            raise RuntimeError(
-                "搜不出去 —— 本机现在没有可用代理，直连被 DNS 污染或超时挡住了。\n"
-                f"（{detail}）\n"
-                "开一下代理工具就行，tools.proxy 是 auto，会自己认，不用改配置。")
-        raise RuntimeError(f"搜索无结果或后端不可用（{detail}）")
+        raise RuntimeError(f"搜索无结果或后端不可用（最后：{last_err}）")
 
     out = []
     for r in raw or []:

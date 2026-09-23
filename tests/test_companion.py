@@ -22,7 +22,7 @@ class Services(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(dir=work)
         self.root = Path(self.tmp.name)
         (self.root / 'data').mkdir()
-        shutil.copyfile(PROJECT / 'data/config.json', self.root / 'data/config.json')
+        shutil.copyfile(PROJECT / 'data/config.example.json', self.root / 'data/config.json')
         self.old_root = M.ROOT
         M.ROOT = self.root
         self.store = C.Store(self.root)
@@ -47,6 +47,19 @@ class Services(unittest.TestCase):
         self.store.session(new=True)
         self.assertEqual(self.store.history(), [])
         self.assertEqual(len(self.store.messages(old)), 2)
+
+    def test_session_listing_and_selection_stay_in_store_service(self):
+        old = self.store.session()
+        self.pair('旧话题标题', '旧话题回复')
+        self.store.session(new=True)
+        self.pair('新话题标题', '新话题回复')
+        sessions = self.store.sessions()
+        self.assertEqual([s['title'] for s in sessions[:2]],
+                         ['新话题标题', '旧话题标题'])
+        self.assertEqual(self.store.select_session(old), old)
+        self.assertEqual(self.store.session(), old)
+        with self.assertRaises(ValueError):
+            self.store.select_session('missing-session')
 
     def test_incomplete_messages_not_sent_as_success(self):
         self.store.add_message('user', '没有发完', status='pending')

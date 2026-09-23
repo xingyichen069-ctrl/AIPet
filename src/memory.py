@@ -98,6 +98,14 @@ CFG = load_config()
 P = CFG["paths"]
 
 
+def reload_config() -> dict:
+    """Reload the editable application config after an in-app settings save."""
+    global CFG, P
+    CFG = load_config()
+    P = CFG["paths"]
+    return CFG
+
+
 def _p(key: str) -> Path:
     return ROOT / P[key]
 
@@ -486,9 +494,12 @@ def score_entry(entry: dict, query_toks: set[str], ref: datetime,
 
 
 def retrieve(query: str, query_tags: list[str] | None = None,
-             budget_tokens: int | None = None, top_k: int | None = None) -> list[dict]:
+             budget_tokens: int | None = None, top_k: int | None = None,
+             retrieval: dict | None = None) -> list[dict]:
     """按分数检索记忆，受 token 预算和条数上限约束。"""
-    r = CFG["retrieval"]
+    # 本轮参数由调用者显式传入。不要把一次请求的档位写回全局 CFG，
+    # 否则桌面、QQ 和后台任务并发时会互相污染检索边界。
+    r = retrieval or CFG["retrieval"]
     budget = budget_tokens if budget_tokens is not None else r["token_budget"]
     k = top_k if top_k is not None else r["max_entries"]
 
@@ -545,17 +556,22 @@ def retrieve(query: str, query_tags: list[str] | None = None,
 # ---------------------------------------------------------------- prompt 组装
 
 def persona_text(include: tuple[str, ...] = ("SOUL.md", "BOUNDARIES.md")) -> str:
-    """读取当前人格；人格库不可用时回退到旧版 persona/ 文件。"""
+    """
+    读人格文件，**剥掉给用户看的编辑说明**。
+
+    这是共用入口 —— 桌宠（brain.py）和 MCP（mcp_server.py）都走它。
+    之前剥离逻辑只写在 brain.py 里，结果 MCP 那条路把
+    "这是你最该动手改的文件"原样喂给了 QQ 上的小日和，
+    害她以为自己是份待编辑的文档。
+
+    同一个文件，你看到的是说明书，她看到的是自己。
+
+    注意 HTML 注释里不能再出现注释结束标记，否则会提前闭合 ——
+    SOUL.md 的说明里已经写了这条。
+    """
     parts = []
-    persona_files = None
-    try:
-        from persona_manager import PersonaManager
-        persona_files = PersonaManager(ROOT).active_files()
-    except (ImportError, OSError, ValueError, TypeError):
-        persona_files = None
     for f in include:
-        p = (persona_files or {}).get(f) if persona_files else None
-        p = Path(p) if p else ROOT / "persona" / f
+        p = ROOT / "persona" / f
         if not p.exists():
             continue
         t = p.read_text(encoding="utf-8")
@@ -600,10 +616,11 @@ def _profile_facts() -> str:
     return "\n\n".join(kept).strip() or "（暂无）"
 
 
-def build_context(query: str, query_tags: list[str] | None = None) -> str:
+def build_context(query: str, query_tags: list[str] | None = None,
+                  retrieval: dict | None = None) -> str:
     """组装要注入 prompt 的记忆片段。"""
     st = load_state()
-    mem = retrieve(query, query_tags)
+    mem = retrieve(query, query_tags, retrieval=retrieval)
 
     parts = ["## 当前关系状态"]
     parts.append(

@@ -168,6 +168,33 @@ class Store:
             db.execute('INSERT INTO sessions VALUES (?,?,1)', (sid, time.time()))
             return sid
 
+    def sessions(self, limit=50):
+        """Return selectable conversation summaries without exposing SQL to the UI."""
+        limit = max(1, min(int(limit), 200))
+        with self.db() as db:
+            rows = db.execute(
+                "SELECT s.id,s.created,"
+                "(SELECT text FROM messages WHERE session=s.id "
+                "AND role='user' AND status!='forgotten' "
+                "ORDER BY created LIMIT 1) AS title "
+                "FROM sessions s ORDER BY created DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def select_session(self, session_id):
+        """Make an existing conversation active and return its id."""
+        session_id = str(session_id or '').strip()
+        if not session_id:
+            raise ValueError('话题编号不能为空。')
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if not db.execute('SELECT 1 FROM sessions WHERE id=?',
+                              (session_id,)).fetchone():
+                raise ValueError('找不到这个话题。')
+            db.execute('UPDATE sessions SET active=0')
+            db.execute('UPDATE sessions SET active=1 WHERE id=?', (session_id,))
+        return session_id
+
     def add_message(self, role, text, context=None, status='complete', session=None):
         sid = session or self.session()
         mid = uuid.uuid4().hex

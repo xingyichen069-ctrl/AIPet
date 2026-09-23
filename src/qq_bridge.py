@@ -28,8 +28,8 @@ QQ 规定被动回复必须**5 分钟内**发出，否则吃 40034128。
 而 thinking.json 里的 deep/max 档，思维链能跑好几分钟。
 在桌宠里没问题（你等得起），群里就是稳定超时。
 
-所以群里固定走 daily，而且 max_tokens 在**调用之前**就定死（GROUP_MAX_TOKENS）——
-不能指望"生成完了再截断"，那样时间已经花掉了。
+普通群聊默认走 daily。群成员可以用档位指令切换本群档位；
+神格状态（雷霆大思考）会放宽记忆和回复额度，但仍受 QQ 的 5 分钟被动回复窗口约束。
 
 ★ 但**额度不是时间闸**。给多少 token 和"会不会超时"是两件事：
   token 额度决定思维链会不会被拦腰砍断，时间由 REPLY_BUDGET_S 管。
@@ -49,13 +49,16 @@ import sys
 import threading
 import time
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import memory as M  # noqa: E402
+import local_tools as LT  # noqa: E402
 import people as P  # noqa: E402
 import qq_bot as QB  # noqa: E402
 import qq_text as QT  # noqa: E402
+import update_lifecycle as UL  # noqa: E402
 
 if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("-", "") != "utf8":
     try:
@@ -67,7 +70,7 @@ if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("
 # 被动回复 5 分钟。留一分钟给发送本身，取 240 秒。
 REPLY_BUDGET_S = 240
 
-# 群里不给 deep/max。理由见文件头。
+# 群聊默认日常；每个群可以用指令切换自己的档位。
 GROUP_LEVEL = "daily"
 
 # ★ max_tokens 是**思维链和正文共享的**。
@@ -83,6 +86,7 @@ GROUP_LEVEL = "daily"
 #     生成超时会被丢弃、根本不发出去，撞不到 QQ 的 5 分钟窗口。
 #     代价是"想太久"的答案会被丢掉 —— 日志里会留一行，不是静默失败。
 GROUP_MAX_TOKENS = 10500
+GROUP_THUNDER_MAX_TOKENS = 120000
 
 # 单聊没有 5 分钟的紧迫感，但输出长度限制是一样的
 C2C_LEVEL = None            # None = 跟随 thinking.json
@@ -109,9 +113,61 @@ MAX_PENDING = 5
 #
 #   记忆库救不了这个 —— 检索是按关键词的，"再来再来"四个字
 #   命中不了任何东西。上下文就是上下文，得单独存。
-HIST_MAX = 12               # 每个会话留几条
+HIST_MAX = 12               # 普通会话留几条
+THUNDER_HIST_MAX = 120      # 神格状态允许更长的群聊上下文
+HIST_STORAGE_MAX = THUNDER_HIST_MAX * 2
 HIST_TTL_MIN = 30           # 超过这么久没说话就当换了话题
 HIST_FILE = M.ROOT / "data" / "qq_history.json"
+GROUP_LEVEL_FILE = M.ROOT / "data" / "qq_group_levels.json"
+_group_level_lock = threading.RLock()
+
+
+def _group_levels_load() -> dict:
+    try:
+        d = json.loads(GROUP_LEVEL_FILE.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def group_level_for(group_openid: str) -> str:
+    """读取本群档位；没有设置时使用普通群聊默认档。"""
+    group_openid = str(group_openid or "").strip()
+    if not group_openid:
+        return GROUP_LEVEL
+    with _group_level_lock:
+        level = str(_group_levels_load().get(group_openid) or GROUP_LEVEL)
+    import thinking as T
+    return level if level == "auto" or level in T.load().get("presets", {}) else GROUP_LEVEL
+
+
+def set_group_level(group_openid: str, level: str) -> None:
+    """只改本群设置，不影响桌宠、私聊或其它群。"""
+    group_openid = str(group_openid or "").strip()
+    if not group_openid:
+        raise ValueError("缺少群标识")
+    with _group_level_lock:
+        values = _group_levels_load()
+        values[group_openid] = level
+        GROUP_LEVEL_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = GROUP_LEVEL_FILE.with_name(
+            GROUP_LEVEL_FILE.name + f".{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps(values, ensure_ascii=False, indent=2) + "\n",
+                       encoding="utf-8")
+        tmp.replace(GROUP_LEVEL_FILE)
+
+
+@dataclass(frozen=True)
+class DeliveryReceipt:
+    """平台出站结果；只有 accepted 才能进入已发送历史。"""
+
+    status: str
+    text: str = ""
+    response: dict | None = None
+
+    @property
+    def accepted(self) -> bool:
+        return self.status == "accepted"
 
 # 不回复的低信息量消息
 IGNORE_EXACT = {"", "。", ".", "？", "?", "！", "!", "…", "。。。", "test"}
@@ -151,7 +207,7 @@ def _hist_save(d: dict) -> None:
         pass
 
 
-def hist_for(key: str) -> list[dict]:
+def hist_for(key: str, max_items: int | None = None) -> list[dict]:
     """
     这个会话最近说的话。
 
@@ -167,7 +223,7 @@ def hist_for(key: str) -> list[dict]:
         return []
     if (M.now() - last).total_seconds() > HIST_TTL_MIN * 60:
         return []
-    return items[-HIST_MAX:]
+    return items[-(max_items or HIST_MAX):]
 
 
 def hist_append(key: str, role: str, name: str, text: str) -> None:
@@ -183,7 +239,7 @@ def hist_append(key: str, role: str, name: str, text: str) -> None:
             "text": text[:300],
             "ts": M.now_iso(),
         })
-        d[key] = items[-HIST_MAX * 2:]        # 存多一点，读的时候再截
+        d[key] = items[-HIST_STORAGE_MAX:]    # 神格状态需要更长的上下文，读取时再按档位截
         # 顺手清掉太老的会话，别让文件无限长
         cutoff = M.now().timestamp() - 6 * 3600
         for k in list(d):
@@ -197,7 +253,10 @@ def hist_append(key: str, role: str, name: str, text: str) -> None:
 
 def hist_block(ev: QB.QQEvent) -> str:
     """把历史拼成注入文本。没有就返回空串。"""
-    items = hist_for(conv_key(ev))
+    limit = (THUNDER_HIST_MAX
+             if ev.scene == "group" and group_level_for(ev.group_openid) == "thunder"
+             else HIST_MAX)
+    items = hist_for(conv_key(ev), limit)
     if not items:
         return ""
     lines = ["## 刚才聊的（旧的在上）", ""]
@@ -284,6 +343,14 @@ def build_prompt(ev: QB.QQEvent, who: dict) -> str:
         lines += ["", "★ 这是私聊，只有他看得到。可以放松一点。",
                   f"★ 回复仍然要短，QQ 限 {REPLY_CHARS_HINT} 中文字以内。"]
 
+    if who.get("is_owner"):
+        lines += [
+            "",
+            "★ 如果主人明确要你写程序、运行代码、生成图片/报告/文件或反复调试，"
+            "调用 code_task 把它交给后台本地代码任务；不要在这条普通回复里假装已经做完。"
+            "普通问答和解释不需要调用。",
+        ]
+
     parts.append("\n".join(lines))
     return "\n".join(parts)
 
@@ -295,15 +362,14 @@ def build_system(ev: QB.QQEvent) -> tuple[str, dict]:
     走 brain.build_system 的话会带上桌宠的 system_block（思考档位的
     那一堆说明），那在群里是多余的。这里自己拼，只保留有用的部分。
     """
-    import brain as B
     import thinking as T
 
-    level = GROUP_LEVEL if ev.scene == "group" else C2C_LEVEL
-    # 让记忆检索用上这个档位的预算（和桌宠那条路一致）
-    T.apply_to_memory(level, ev.content)
+    level = group_level_for(ev.group_openid) if ev.scene == "group" else C2C_LEVEL
+    # 让这一轮记忆检索用上这个档位的预算，不改变进程级配置。
+    options = T.apply_to_memory(level, ev.content)
 
     persona = M.persona_text()
-    ctx = M.build_context(ev.content)
+    ctx = M.build_context(ev.content, retrieval=options["retrieval"])
 
     platform = (
         "## 你现在在 QQ 上说话\n\n"
@@ -319,7 +385,7 @@ def build_system(ev: QB.QQEvent) -> tuple[str, dict]:
     )
 
     system = "\n\n---\n\n".join(p for p in [persona, ctx, platform] if p)
-    return system, {"level": level}
+    return system, {"level": level, "options": options}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -505,8 +571,7 @@ def claim_reply(ev: QB.QQEvent, who: dict) -> str | None:
 #  指令口
 # ═══════════════════════════════════════════════════════════════
 
-# ★ 只在主人那儿开。群里谁都能发的话，档位就成了公共设施；
-#   而且 deep/max 在群里还会拖长响应，更容易撞 40034128。
+# 群聊档位是本群公共设置，所有群成员都可以切换；私聊仍只允许主人改全局档位。
 LEVEL_ALIAS = {
     "auto": "auto", "自动": "auto",
     "frugal": "frugal", "省电": "frugal",
@@ -514,8 +579,10 @@ LEVEL_ALIAS = {
     "serious": "serious", "认真": "serious",
     "deep": "deep", "深究": "deep",
     "max": "max", "极限": "max",
+    "thunder": "thunder", "雷霆": "thunder", "雷霆大思考": "thunder",
+    "神格": "thunder", "神格状态": "thunder", "god": "thunder", "godmode": "thunder",
 }
-LEVEL_ORDER = ("auto", "frugal", "daily", "serious", "deep", "max")
+LEVEL_ORDER = ("auto", "frugal", "daily", "serious", "deep", "max", "thunder")
 
 CMD_RE = re.compile(r"^[/／]?(档位|思考|level|thinking)\s*[:：]?\s*(\S*)$", re.I)
 
@@ -542,7 +609,7 @@ def command_reply(ev: QB.QQEvent, who: dict) -> str | None:
     m = CMD_RE.match(text)
     if not m:
         return None
-    if not who.get("is_owner"):
+    if ev.scene != "group" and not who.get("is_owner"):
         return "这个只有他能调。"
 
     import thinking as T
@@ -553,7 +620,7 @@ def command_reply(ev: QB.QQEvent, who: dict) -> str | None:
 
     arg = (m.group(2) or "").strip().lower()
     if not arg:
-        cur = T.current_level()
+        cur = group_level_for(ev.group_openid) if ev.scene == "group" else T.current_level()
         return f"现在是「{names.get(cur, cur)}」\n可选：{opts}"
 
     lv = LEVEL_ALIAS.get(arg)
@@ -563,13 +630,17 @@ def command_reply(ev: QB.QQEvent, who: dict) -> str | None:
         #   然后答非所问。宁可漏一个打错字的提示。
         return None
 
+    if ev.scene == "group":
+        old = group_level_for(ev.group_openid)
+        set_group_level(ev.group_openid, lv)
+        log(f"本群档位 {old} → {lv}（群 {ev.group_openid[:8]}… by {who['name']!r}）")
+        return (f"好，本群切到「{names.get(lv, lv)}」。\n"
+                "所有群友的后续消息都会使用这个档位；桌宠、私聊和其它群不受影响。")
+
     old = T.current_level()
     T.set_level(lv)
     log(f"档位 {old} → {lv}（{ev.scene} by {who['name']!r}）")
-    # ★ 群里那条消息本身仍走 daily（见文件头），得说清楚，
-    #   不然他调完发现"没反应"，会以为是坏的。
-    tail = "\n群里还是走日常档（怕超时），这条对单聊和桌宠生效。" if ev.scene == "group" else ""
-    return f"好，切到「{names.get(lv, lv)}」。{tail}"
+    return f"好，切到「{names.get(lv, lv)}」。"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -685,15 +756,17 @@ class Bridge:
         # 认领优先，别拿去喂模型
         c = claim_reply(ev, who)
         if c is not None:
-            self._send(ev, c)
-            hist_append(conv_key(ev), "assistant", "", c)
+            receipt = self._send(ev, c)
+            if receipt.accepted:
+                hist_append(conv_key(ev), "assistant", "", receipt.text)
             return
 
         # 指令口。也排在喂模型前面 —— 指令不是聊天内容。
         c = command_reply(ev, who)
         if c is not None:
-            self._send(ev, c)
-            hist_append(conv_key(ev), "assistant", "", c)
+            receipt = self._send(ev, c)
+            if receipt.accepted:
+                hist_append(conv_key(ev), "assistant", "", receipt.text)
             return
 
         # 带图的消息正文可能是空的，别拿"低信息量"把它误杀
@@ -712,23 +785,34 @@ class Bridge:
             return
 
         system, meta = build_system(ev)
-        budget = (GROUP_MAX_TOKENS if ev.scene == "group" else C2C_MAX_TOKENS)
+        budget = (GROUP_THUNDER_MAX_TOKENS
+                  if ev.scene == "group" and meta["level"] == "thunder"
+                  else GROUP_MAX_TOKENS if ev.scene == "group" else C2C_MAX_TOKENS)
         left = REPLY_BUDGET_S - (time.time() - t0)
         if left <= 20:
             log(f"只剩 {left:.0f} 秒，来不及想了")
             return
+        deadline = time.monotonic() + left
 
         prompt = build_prompt(ev, who)
         try:
-            # ★ 非主人不给 see_image。那个工具会把整个文件 base64 之后
-            #   发到 vision.py 配的那个服务（可能是外部的），群里任何人
-            #   都不该有这个口子 —— 一句"看看 D:\某文件.png"就够把东西送出去。
+            # ★ see_image 会把整个文件 base64 之后发到 vision.py 配的那个服务
+            #   （可能是外部的），群里任何人都不该有这个口子 —— 一句
+            #   "看看 D:\某文件.png"就够把东西送出去。代码任务也只由认证主人发起，
+            #   run_python 则永远只在后台任务上下文里开放。
             #   主人的记忆里有这条规矩，但记忆是说服，这里是拦。
-            blocked = None if who["is_owner"] else {"see_image"}
-            reply, _reasoning, info = B.ask_with_system(
-                prompt, system,
-                level=meta["level"], max_tokens=budget,
-                block_tools=blocked)
+            blocked = {"run_python"}
+            if not who["is_owner"]:
+                blocked |= {"see_image", "code_task"}
+            with LT.bind_context(
+                    source="qq", event=ev, conversation_key=conv_key(ev),
+                    actor_id=who.get("id", ""), actor_name=who.get("name", ""),
+                    is_owner=bool(who.get("is_owner"))):
+                reply, _reasoning, info = B.ask_with_system(
+                    prompt, system,
+                    level=meta["level"], max_tokens=budget,
+                    block_tools=blocked, options=meta.get("options"),
+                    deadline=deadline)
         except Exception as e:
             log(f"brain 出错：{type(e).__name__}: {e}")
             return
@@ -746,11 +830,13 @@ class Bridge:
         # ★ 回话内容也写日志。之前只记了字数，出了问题根本看不到
         #   她到底说了什么 —— 排查"逻辑不通"的时候两眼一抹黑。
         log(f"想了 {took:.1f} 秒，回 {len(reply)} 字：{reply[:120]}")
-        self._send(ev, reply)
-        hist_append(conv_key(ev), "assistant", "", reply)
+        receipt = self._send(ev, reply)
+        if not receipt.accepted:
+            return
+        hist_append(conv_key(ev), "assistant", "", receipt.text)
 
         # ── 记 ──
-        self._remember(ev, who, reply)
+        self._remember(ev, who, receipt.text)
         self._log_mood(ev)
 
     def _log_mood(self, ev: QB.QQEvent) -> None:
@@ -761,18 +847,27 @@ class Bridge:
         except Exception as e:
             log(f"mood 日志出错：{type(e).__name__}: {e}")
 
-    def _send(self, ev: QB.QQEvent, text: str) -> None:
+    def _send(self, ev: QB.QQEvent, text: str) -> DeliveryReceipt:
         clean, notes = QT.sanitize(text)
         if not clean:
             log("清洗后没内容了，不发")
-            return
+            return DeliveryReceipt("skipped", response={"_skipped": "清洗后没内容了"})
         if notes:
             log(f"出站清洗：{'、'.join(notes)}")
         r = QB.reply(ev, clean)
-        if r.get("_error") or r.get("_skipped"):
+        if r.get("_skipped"):
             log(f"发送失败：{r}")
+            return DeliveryReceipt("skipped", clean, r)
+        if r.get("_error"):
+            # 网络错误时请求是否已经到达平台未知，不能把它当作可安全重发的失败。
+            log(f"发送结果未知：{r}")
+            return DeliveryReceipt("unknown", clean, r)
+        if r.get("_http_error"):
+            log(f"平台拒绝发送：{r}")
+            return DeliveryReceipt("failed", clean, r)
         else:
             log("已回复")
+            return DeliveryReceipt("accepted", clean, r)
 
     def _remember(self, ev: QB.QQEvent, who: dict, reply: str) -> None:
         """落盘。主人的话进记忆库，群友的话只进人物卡的临时笔记。"""
@@ -828,6 +923,8 @@ def selftest() -> int:
     # 记忆库整份原样快照，收尾时原样写回（见 finally 里的说明）
     _jf = M._p("journal")
     _journal_before = _jf.read_bytes() if _jf.exists() else None
+    _group_levels_before = (GROUP_LEVEL_FILE.read_bytes()
+                            if GROUP_LEVEL_FILE.exists() else None)
     try:
         P.save({**P._blank_people()})
         P.save_qq(P._blank_qq())
@@ -861,8 +958,26 @@ def selftest() -> int:
                   for k in ("不发链接", str(REPLY_CHARS_HINT), "Markdown")))
 
         # ── 档位与预算 ──
-        check("群里固定 daily", build_system(_fake())[1]["level"] == "daily")
-        check("群里不给 deep/max", GROUP_LEVEL not in ("deep", "max"))
+        _group_levels_before_test = (GROUP_LEVEL_FILE.read_bytes()
+                                     if GROUP_LEVEL_FILE.exists() else None)
+        try:
+            GROUP_LEVEL_FILE.unlink(missing_ok=True)
+            group_ev = _fake(content="/档位 神格", group="LEVEL_GROUP",
+                             oid="GUEST_LEVEL", name="群友甲")
+            group_who = identify(group_ev)
+            changed = command_reply(group_ev, group_who)
+            check("群友可以切换群档位", changed is not None and "雷霆大思考" in changed)
+            check("神格档位写入本群", group_level_for("LEVEL_GROUP") == "thunder")
+            check("神格档位用于本群", build_system(group_ev)[1]["level"] == "thunder")
+            check("神格档位提高群聊预算", GROUP_THUNDER_MAX_TOKENS > GROUP_MAX_TOKENS)
+            check("神格状态保留更长历史", THUNDER_HIST_MAX > HIST_MAX)
+            check("查询本群档位", "雷霆大思考" in (command_reply(
+                _fake(content="/档位", group="LEVEL_GROUP"), group_who) or ""))
+        finally:
+            if _group_levels_before_test is None:
+                GROUP_LEVEL_FILE.unlink(missing_ok=True)
+            else:
+                GROUP_LEVEL_FILE.write_bytes(_group_levels_before_test)
         check("240 秒闸小于 QQ 的 5 分钟", REPLY_BUDGET_S < 300)
 
         # ★ 这条是永久守卫。踩过一次：提示词说"500 字以内"，
@@ -988,6 +1103,10 @@ def selftest() -> int:
     finally:
         P.save(bp)
         P.save_qq(bq)
+        if _group_levels_before is None:
+            GROUP_LEVEL_FILE.unlink(missing_ok=True)
+        else:
+            GROUP_LEVEL_FILE.write_bytes(_group_levels_before)
         # ★ 用「原样快照 + 原样还原」，不要用条件过滤。
         #
         #   踩过的坑（真丢过数据）：原来这里写的是
@@ -1035,7 +1154,7 @@ def selftest() -> int:
 # ═══════════════════════════════════════════════════════════════
 
 def run(reply_enabled: bool = True) -> int:
-    from PySide6.QtCore import QCoreApplication
+    from PySide6.QtCore import QCoreApplication, QTimer
     import brain as B
 
     app = QCoreApplication(sys.argv)
@@ -1063,7 +1182,21 @@ def run(reply_enabled: bool = True) -> int:
     )
     gw.start()
     log(f"跑起来了（{'会回复' if reply_enabled else '只收不发'}）。Ctrl+C 停。")
-    return app.exec()
+    update_timer = QTimer()
+
+    def stop_for_update():
+        if UL.pending(M.ROOT):
+            gw.stop()
+            app.quit()
+
+    update_timer.timeout.connect(stop_for_update)
+    update_timer.start(250)
+    try:
+        with UL.registered(M.ROOT, "qq"):
+            return app.exec()
+    finally:
+        update_timer.stop()
+        gw.stop()
 
 
 def main() -> None:

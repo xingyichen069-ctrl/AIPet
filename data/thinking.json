@@ -2,7 +2,7 @@
   "_说明": "思考强度配置。面板上的选项和这里一一对应。改完保存，面板会自动重载。",
   "_手册": "详细调参说明见 docs/思考强度配置手册.md",
   "current": "max",
-  "_current": "auto | frugal | daily | serious | deep | max",
+  "_current": "auto | frugal | daily | serious | deep | max | thunder",
   "auto_rules": {
     "_说明": "自动模式下按这些规则判断该用哪一档。分数从 0 起算，落在哪个区间就用哪档。",
     "thresholds": {
@@ -171,6 +171,26 @@
         "search": "always",
         "self_check": true,
         "verbosity": "尽可能完整。分点、举例、给边界条件"
+      }
+    },
+    "thunder": {
+      "name": "雷霆大思考",
+      "icon": "ϟ",
+      "color": "#fb7185",
+      "summary": "神格状态·超长上下文",
+      "feels_like": "雷霆劈开了所有线索，它把眼前和很久以前的事一起推演。",
+      "when": "需要跨越很长上下文、综合大量记忆或做极深推演",
+      "params": {
+        "model": "deepseek::deepseek-flash",
+        "reasoning_effort": "max",
+        "max_tokens": 120000,
+        "temperature": 0.35,
+        "memory_budget": 120000,
+        "memory_entries": 120,
+        "memory_floor": 20,
+        "search": "always",
+        "self_check": true,
+        "verbosity": "允许超长上下文，完整展开推理结论、依据、边界和遗漏"
       }
     }
   },
