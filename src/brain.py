@@ -85,7 +85,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -94,7 +93,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import memory as M          # noqa: E402
 import thinking as T        # noqa: E402
-import conversation_core as C  # noqa: E402
 
 try:
     import local_tools as LT
@@ -183,27 +181,13 @@ def load_secrets() -> dict:
 
 
 def api_key() -> str:
-    secrets = load_secrets()
-    # 兼容设置中心和旧版配置：设置中心使用通用 provider 字段，旧版
-    # 仍使用 deepseek_* 字段。环境变量优先于本地文件。
-    return (os.environ.get("DEEPSEEK_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-            or secrets.get("deepseek_api_key", "")
-            or secrets.get("auth_token", ""))
+    return os.environ.get("DEEPSEEK_API_KEY") or load_secrets().get("deepseek_api_key", "")
 
 
 def base_url() -> str:
-    secrets = load_secrets()
     return (os.environ.get("DEEPSEEK_BASE_URL")
-            or os.environ.get("OPENAI_BASE_URL")
-            or secrets.get("deepseek_base_url")
-            or secrets.get("base_url")
+            or load_secrets().get("deepseek_base_url")
             or DEFAULT_BASE)
-
-
-def provider_model() -> str:
-    """Return a model from the generic provider config, when present."""
-    return str(load_secrets().get("model") or "").strip()
 
 
 def save_key(key: str) -> None:
@@ -232,18 +216,25 @@ def build_system(query: str, level: str | None = None) -> tuple[str, dict]:
 
     system = 人格设定 + 思考强度指令 + 记忆（关系状态/相关回忆/用户档案）
     """
-    options = C.snapshot_options(query, level)
-    return C.desktop_system(query, options), options
+    r = T.apply_to_memory(level, query)      # 这一步让 memory 用上当前档位的预算
+    body = T.system_block(query, r["level"]) + "\n\n" + M.build_context(query)
+    from companion import Store, task_description
+    if (M.ROOT / "data" / "companion.sqlite3").exists():
+        agreements = Store(M.ROOT).tasks()
+        if agreements:
+            body += "\n\n## 已保存的约定与陪伴\n" + "\n".join(task_description(t) for t in agreements[:20])
+    return f"{persona_text()}\n\n---\n\n{body}", r
 
 
 def build_payload(query: str, history: list[dict] | None = None,
-                  level: str | None = None, stream: bool = True,
-                  system: str | None = None, max_tokens: int | None = None,
-                  options: dict | None = None, policy=None) -> tuple[dict, dict]:
-    request = C.prepare(query, history, level, system=system,
-                        max_tokens=max_tokens, options=options)
-    r = request.options
+                  level: str | None = None, stream: bool = True) -> tuple[dict, dict]:
+    system, r = build_system(query, level)
     p = r["params"]
+
+    messages = [{"role": "system", "content": system}]
+    for h in (history or [])[-16:]:          # 只带最近 12 轮，够了
+        messages.append({"role": h["role"], "content": h["content"]})
+    messages.append({"role": "user", "content": query})
 
     effort = EFFORT_MAP.get(p.get("reasoning_effort", "low"), "high")
 
@@ -256,27 +247,12 @@ def build_payload(query: str, history: list[dict] | None = None,
                  if t["function"]["name"] != "web_search"
                  or p.get("search", "on_demand") != "off"]
 
-    selected_model = p.get("model", "")
-    configured_model = provider_model()
-    # A provider-level model is authoritative when the old preset still has
-    # the historical DeepSeek default. This keeps migrated settings usable.
-    if configured_model and (not selected_model or str(selected_model).startswith("deepseek::")):
-        selected_model = configured_model
-    # Keep diagnostics and downstream metadata aligned with the model actually
-    # sent to the provider.
-    r = dict(r)
-    r["params"] = dict(r.get("params", {}))
-    r["params"]["model"] = selected_model
     payload = {
-        "model": api_model(selected_model or "deepseek-flash"),
-        "messages": request.messages(),
-        "max_tokens": (request.max_tokens
-                        if request.max_tokens is not None
-                        else p.get("max_tokens", 800)),
+        "model": api_model(p.get("model", "deepseek-flash")),
+        "messages": messages,
+        "max_tokens": p.get("max_tokens", 800),
         "stream": stream,
     }
-    if policy and tools:
-        tools = policy.visible(tools)
     if tools:
         payload["tools"] = tools
 
@@ -296,7 +272,7 @@ def build_payload(query: str, history: list[dict] | None = None,
 #  调用
 # ═══════════════════════════════════════════════════════════════
 
-def _request(payload: dict, key: str, timeout: float = 30):
+def _request(payload: dict, key: str):
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
         f"{base_url().rstrip('/')}/chat/completions",
@@ -308,15 +284,7 @@ def _request(payload: dict, key: str, timeout: float = 30):
         },
         method="POST",
     )
-    return urllib.request.urlopen(req, timeout=max(0.1, float(timeout)))
-
-
-def _deadline_expired(deadline: float | None) -> bool:
-    return deadline is not None and time.monotonic() >= deadline
-
-
-def _stopped(cancelled=None, deadline: float | None = None) -> bool:
-    return bool(cancelled and cancelled()) or _deadline_expired(deadline)
+    return urllib.request.urlopen(req, timeout=30)
 
 
 def _explain(e: Exception) -> str:
@@ -343,10 +311,7 @@ def _explain(e: Exception) -> str:
 def stream(query: str, history: list[dict] | None = None,
            level: str | None = None, cancelled=None,
            system: str | None = None, max_tokens: int | None = None,
-           block_tools: set[str] | None = None,
-           allowed_tools: set[str] | None = None,
-           options: dict | None = None,
-           deadline: float | None = None):
+           block_tools: set[str] | None = None):
     """
     流式生成。产出 (类型, 文本)：
         ("level", 档位信息)  —— 只产一次，最先
@@ -359,15 +324,23 @@ def stream(query: str, history: list[dict] | None = None,
         yield ("error", "没有 API key。运行：python src/brain.py setkey sk-xxxx")
         return
 
+    payload, r = build_payload(query, history, level, stream=True)
+    # QQ 那条路的覆盖口：群聊要自带更短的 system，而且必须在**调用之前**
+    # 就把 max_tokens 压下来 —— 被动回复只有 5 分钟，生成完再截断时间已经花掉了。
+    if system is not None:
+        payload["messages"][0] = {"role": "system", "content": system}
+    if max_tokens is not None:
+        payload["max_tokens"] = int(max_tokens)
+
     # ★ 工具黑名单。QQ 那条路用它挡住 see_image —— 那个工具会把整个文件
     #   发到校外服务器，不能让群里的人靠一句话就把谁的文件送出去。
     #   在**调用之前**摘掉，不是调用之后拦：模型看不见这个工具，
     #   就不会写出针对它的调用，也不会因为"我明明有这个工具"而反复试。
-    policy = LT.make_policy(blocked_tools=block_tools,
-                            allowed_tools=allowed_tools) if LT else None
-    payload, r = build_payload(
-        query, history, level, stream=True, system=system,
-        max_tokens=max_tokens, options=options, policy=policy)
+    if block_tools and payload.get("tools"):
+        payload["tools"] = [t for t in payload["tools"]
+                            if t["function"]["name"] not in block_tools]
+        if not payload["tools"]:
+            payload.pop("tools", None)
 
     yield ("level", r)
 
@@ -377,7 +350,7 @@ def stream(query: str, history: list[dict] | None = None,
     force_final = False
 
     while True:
-        if _stopped(cancelled, deadline):
+        if cancelled and cancelled():
             return
         body = {**payload, "messages": messages}
         if force_final:
@@ -391,17 +364,7 @@ def stream(query: str, history: list[dict] | None = None,
         calls: dict[int, dict] = {}          # index → {id, name, args}
 
         try:
-            if deadline is None:
-                resp = _request(body, key)
-            else:
-                left = deadline - time.monotonic()
-                if left <= 0:
-                    return
-                # Keep a stalled SSE read from overshooting the caller's
-                # deadline, while allowing the proxy enough time to finish
-                # the TLS handshake.  Five seconds was too short on macOS
-                # when the model endpoint was reached through a proxy.
-                resp = _request(body, key, timeout=min(30.0, left))
+            resp = _request(body, key)
         except Exception as e:
             yield ("error", _explain(e))
             return
@@ -409,7 +372,7 @@ def stream(query: str, history: list[dict] | None = None,
         try:
             with resp:
                 for raw in resp:
-                    if _stopped(cancelled, deadline):
+                    if cancelled and cancelled():
                         return
                     line = raw.decode("utf-8", errors="replace").strip()
                     if not line or not line.startswith("data:"):
@@ -453,9 +416,6 @@ def stream(query: str, history: list[dict] | None = None,
             yield ("error", _explain(e))
             return
 
-        if _stopped(cancelled, deadline):
-            return
-
         if not calls:
             break                            # 没有工具调用 → 这就是最终回答
 
@@ -485,7 +445,7 @@ def stream(query: str, history: list[dict] | None = None,
         })
 
         for i, s in sorted(calls.items()):
-            if _stopped(cancelled, deadline):
+            if cancelled and cancelled():
                 return
             try:
                 args = json.loads(s["args"] or "{}")
@@ -494,10 +454,7 @@ def stream(query: str, history: list[dict] | None = None,
             shown = ", ".join(f"{k}={v!r}" for k, v in args.items())
             yield ("tool", f"⚙ {s['name']}({shown})")
 
-            result = (LT.call(s["name"], args, policy=policy, deadline=deadline)
-                      if LT else "工具模块未加载")
-            if _stopped(cancelled, deadline):
-                return
+            result = LT.call(s["name"], args) if LT else "工具模块未加载"
             first = result.strip().splitlines()[0] if result.strip() else "(空)"
             yield ("tool", f"  → {first[:120]}")
 
@@ -515,7 +472,7 @@ def stream(query: str, history: list[dict] | None = None,
 
 
 def ask(query: str, history: list[dict] | None = None,
-        level: str | None = None, deadline: float | None = None) -> tuple[str, str, dict]:
+        level: str | None = None) -> tuple[str, str, dict]:
     """
     把流式结果收成整块。返回 (正文, 思维链, 档位信息)。
 
@@ -527,7 +484,7 @@ def ask(query: str, history: list[dict] | None = None,
     r: dict = {}
     tools_used: list[str] = []
 
-    for kind, val in stream(query, history, level, deadline=deadline):
+    for kind, val in stream(query, history, level):
         if kind == "content":
             text.append(val)
         elif kind == "reasoning":
@@ -548,11 +505,7 @@ def ask_with_system(query: str, system: str,
                     history: list[dict] | None = None,
                     level: str | None = None,
                     max_tokens: int | None = None,
-                    block_tools: set[str] | None = None,
-                    allowed_tools: set[str] | None = None,
-                    options: dict | None = None,
-                    cancelled=None,
-                    deadline: float | None = None) -> tuple[str, str, dict]:
+                    block_tools: set[str] | None = None) -> tuple[str, str, dict]:
     """
     自带 system 地问一次。返回 (正文, 思维链, 档位信息)。
 
@@ -566,9 +519,7 @@ def ask_with_system(query: str, system: str,
 
     for kind, val in stream(query, history, level,
                             system=system, max_tokens=max_tokens,
-                            block_tools=block_tools, allowed_tools=allowed_tools,
-                            options=options,
-                            cancelled=cancelled, deadline=deadline):
+                            block_tools=block_tools):
         if kind == "content":
             text.append(val)
         elif kind == "reasoning":

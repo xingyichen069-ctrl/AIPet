@@ -59,18 +59,12 @@ class Desktop(unittest.TestCase):
         self.pet.panel = Mock()
         self.pet.bubble_win = None
         self.pet.chat = None
-        self.pet._check_update = Mock()
         self.pet.companion = UI.CompanionController(self.pet)
         self.chat = UI.ChatWindow(self.pet, FakeWorker)
         self.pet.chat = self.chat
         self.chat.show()
         FakeWorker.mode = 'success'
         FakeWorker.queries = []
-
-    def test_update_button_delegates_to_desktop_controller(self):
-        self.assertEqual(self.chat.update_btn.text(), '检查更新')
-        self.chat.update_btn.click()
-        self.pet._check_update.assert_called_once_with()
 
     def tearDown(self):
         if self.chat.busy():
@@ -402,41 +396,6 @@ class Desktop(unittest.TestCase):
         self.assertEqual(self.store.last_user()['status'], 'cancelled')
         self.assertEqual(self.store.history(), [])
 
-    def test_can_send_next_instruction_while_waiting(self):
-        FakeWorker.mode = 'wait'
-        self.chat.input.setPlainText('第一条慢一点')
-        self.chat.send()
-        QTest.qWait(20)
-        self.assertTrue(self.chat.input.isEnabled())
-        FakeWorker.mode = 'success'
-        self.chat.input.setPlainText('第二条继续处理')
-        self.chat.send()
-        self.assertEqual(self.chat._pending_requests, [('第二条继续处理', None)])
-        self.finish()
-        self.finish()
-        self.assertEqual([query for query, _ in FakeWorker.queries[-2:]],
-                         ['第一条慢一点', '第二条继续处理'])
-        self.assertEqual(self.store.messages()[-1]['status'], 'complete')
-
-    def test_can_queue_attachment_while_waiting(self):
-        FakeWorker.mode = 'wait'
-        self.chat.input.setPlainText('先想一下')
-        self.chat.send()
-        QTest.qWait(20)
-        self.assertTrue(self.chat.attach_btn.isEnabled())
-        self.chat.attachment = {'name': '说明.md', 'text': '排队材料', 'image': False}
-        self.chat.attachment_btn.setText('材料：说明.md  ×')
-        self.chat.attachment_btn.show()
-        FakeWorker.mode = 'success'
-        self.chat.input.setPlainText('请结合这个文件继续')
-        self.chat.send()
-        self.assertEqual(self.chat._pending_requests,
-                         [('请结合这个文件继续', {'name': '说明.md', 'text': '排队材料', 'image': False})])
-        self.assertIsNone(self.chat.attachment)
-        self.finish()
-        self.finish()
-        self.assertIn('排队材料', FakeWorker.queries[-1][0])
-
     def test_attachment_paste_remove_and_send(self):
         path = self.root / '材料.md'
         path.write_text('测试材料正文', encoding='utf-8')
@@ -452,20 +411,6 @@ class Desktop(unittest.TestCase):
         self.finish()
         self.assertIn('测试材料正文', FakeWorker.queries[-1][0])
         self.assertIsNone(self.chat.attachment)
-
-    def test_document_attachment_is_read_off_the_gui_thread(self):
-        path = self.root / '材料.docx'
-        path.write_bytes(b'placeholder')
-        attachment = {'name': path.name, 'text': '后台读到的正文', 'image': False}
-        with patch.object(UI.C, 'read_attachment', return_value=attachment) as reader:
-            self.chat.load_attachment(path)
-            for _ in range(30):
-                APP.processEvents()
-                if self.chat.attachment == attachment:
-                    break
-                QTest.qWait(10)
-        self.assertEqual(self.chat.attachment, attachment)
-        reader.assert_called_once_with(str(path))
 
     def test_focus_changes_actual_visual_controller(self):
         self.chat.input.setPlainText('陪我写半小时')

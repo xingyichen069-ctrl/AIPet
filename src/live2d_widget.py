@@ -40,13 +40,13 @@ live2d_widget.py —— 把 Live2D 模型画进 Qt 窗口
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QSurfaceFormat
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
-from PySide6.QtWidgets import QApplication, QWidget
-from gesture import DragGesture
+from PySide6.QtWidgets import QWidget
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -94,6 +94,7 @@ class Live2DWidget(QOpenGLWidget):
     clicked = Signal(str)          # 命中部位名（"Head" / "Body"），没命中传空串
     drag_finished = Signal()       # 拖完窗口，让上层保存位置 / 挪气泡
     hovered = Signal(bool)         # 鼠标进入 / 离开角色实体
+    reload_finished = Signal(bool, str)  # (success, message)
 
     def __init__(self, model_json: str | Path, parent: QWidget | None = None,
                  zoom: float = 1.0, fps: int = 30,
@@ -109,11 +110,17 @@ class Live2DWidget(QOpenGLWidget):
         self.model = None
         self._ready = False
         self._press_pos = None
+        self._press_global_pos = None
         self._win_off = None       # 拖动时记录的窗口偏移
-        self._gesture = DragGesture(QApplication.startDragDistance())
+        self._drag_dist = 0
+        self._dragging = False
+        self._suppress_double_click_until = 0.0
         self._hovering = False
         self._quiet = False
         self._activity = "idle"
+        self._reload_requested = False
+        self._reload_path = self.model_json
+        self._reloading = False
         self._normal_interval = max(16, int(1000 / max(1, fps)))
 
         self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -132,19 +139,23 @@ class Live2DWidget(QOpenGLWidget):
             return
         try:
             live2d.glInit()
-            self.model = live2d.LAppModel()
-            self.model.LoadModelJson(self.model_json)
-            self.model.SetAutoBlinkEnable(self._auto_blink)
-            self.model.SetAutoBreathEnable(self._auto_breath)
-            if abs(self.zoom - 1.0) > 1e-6:
-                self.model.SetScale(self.zoom)
-
-            self._ready = True
+            self.model = self._load_model(self.model_json)
+            self._ready = self.model is not None
             self._timer.start()
             QTimer.singleShot(200, self.play_idle)
         except Exception as e:                       # noqa: BLE001
             print(f"[live2d] 初始化失败：{e}", file=sys.stderr)
             self._ready = False
+
+    def _load_model(self, model_json: str):
+        """Create and configure a model. Must run while this widget owns the GL context."""
+        model = live2d.LAppModel()
+        model.LoadModelJson(str(model_json))
+        model.SetAutoBlinkEnable(self._auto_blink)
+        model.SetAutoBreathEnable(self._auto_breath)
+        if abs(self.zoom - 1.0) > 1e-6:
+            model.SetScale(self.zoom)
+        return model
 
     def resizeGL(self, w: int, h: int):
         # Resize 只在这里调 —— 这时才是真实尺寸
@@ -155,6 +166,8 @@ class Live2DWidget(QOpenGLWidget):
                 print(f"[live2d] resize 失败：{e}", file=sys.stderr)
 
     def paintGL(self):
+        if self._reload_requested and not self._reloading:
+            self._reload_in_context()
         if not self._ready or self.model is None:
             return
         try:
@@ -165,6 +178,42 @@ class Live2DWidget(QOpenGLWidget):
             self.model.Draw()
         except Exception as e:                       # noqa: BLE001
             print(f"[live2d] 绘制失败：{e}", file=sys.stderr)
+
+    def request_reload(self, model_json: str | Path | None = None) -> bool:
+        """Queue a model reload for the next paint pass.
+
+        Live2D model loading touches OpenGL resources, so callers must never invoke
+        ``LoadModelJson`` directly from a menu or worker callback.
+        """
+        if not HAS_LIVE2D or not self._ready:
+            return False
+        if model_json is not None:
+            self._reload_path = str(model_json)
+        self._reload_requested = True
+        self.update()
+        return True
+
+    def _reload_in_context(self):
+        self._reload_requested = False
+        self._reloading = True
+        old_model = self.model
+        try:
+            new_model = self._load_model(self._reload_path)
+            self.model = new_model
+            self.model.Resize(max(1, self.width()), max(1, self.height()))
+            self.model_json = self._reload_path
+            self._ready = True
+            self.reload_finished.emit(True, self.model_json)
+            QTimer.singleShot(0, self.play_idle)
+        except Exception as e:                       # noqa: BLE001
+            # Keep the old model alive when a replacement is invalid.
+            self.model = old_model
+            self._ready = old_model is not None
+            message = str(e)
+            print(f"[live2d] 重载失败：{message}", file=sys.stderr)
+            self.reload_finished.emit(False, message)
+        finally:
+            self._reloading = False
 
     # ---------------------------------------------------------- 交互
 
@@ -225,7 +274,9 @@ class Live2DWidget(QOpenGLWidget):
         try:
             img = self.grabFramebuffer()
             if img.isNull():
-                return 255                      # 取不到就当成不透明，别把功能弄没
+                # 取不到帧缓冲时不能把整块 OpenGL 画布当成角色。
+                # 这里宁可暂时不响应，也不能让透明区域继续误触。
+                return 0
             dpr = img.width() / max(1, self.width())
             x = int(px * dpr)
             y = int(py * dpr)
@@ -233,18 +284,30 @@ class Live2DWidget(QOpenGLWidget):
                 return 0
             return img.pixelColor(x, y).alpha()
         except Exception:                        # noqa: BLE001
-            return 255
+            # OpenGL 上下文短暂不可用（例如窗口刚显示或正在重载模型）
+            # 时，同样按透明处理，避免把整块窗口误判成身体。
+            return 0
+
+    def _model_hit_at(self, px: float, py: float) -> bool:
+        """Return whether an actually rendered character pixel is under the point."""
+        if not (self._ready and self.model):
+            return False
+        # The Cubism Body hit area is intentionally broad and excludes some
+        # visible limbs.  The framebuffer alpha is the precise silhouette and
+        # keeps every visible part clickable while making surrounding space inert.
+        return self._alpha_at(px, py) > 24
 
     def mouseMoveEvent(self, e):
         pos = e.position()
 
-        # 按住左键先保持 PRESSED；超过阈值才进入 DRAGGING。
+        # 按住左键 = 拖窗口；否则 = 视线跟踪 + 悬停反馈
         if (e.buttons() & Qt.LeftButton) and self._win_off is not None:
-            if self._gesture.move(e.globalPosition().toPoint()):
-                self.window().move(e.globalPosition().toPoint() - self._win_off)
-                self.setCursor(Qt.ClosedHandCursor)
-            else:
-                self.setCursor(Qt.ArrowCursor)
+            self.window().move(e.globalPosition().toPoint() - self._win_off)
+            if self._press_global_pos is not None:
+                delta = e.globalPosition().toPoint() - self._press_global_pos
+                self._drag_dist = max(self._drag_dist, int((delta.x() ** 2 + delta.y() ** 2) ** 0.5))
+            if self._drag_dist >= 8:
+                self._dragging = True
         elif self._ready and self.model:
             try:
                 self.model.Drag(*self._to_model(pos.x(), pos.y()))
@@ -252,7 +315,7 @@ class Live2DWidget(QOpenGLWidget):
                 pass
 
             # 只有真正悬在角色身上才算"进入"，透明区域不算
-            on_body = self._alpha_at(pos.x(), pos.y()) > 24
+            on_body = self._model_hit_at(pos.x(), pos.y())
             if on_body != self._hovering:
                 self._hovering = on_body
                 self.setCursor(Qt.PointingHandCursor if on_body else Qt.ArrowCursor)
@@ -268,9 +331,11 @@ class Live2DWidget(QOpenGLWidget):
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
             self._press_pos = e.position()
+            self._press_global_pos = e.globalPosition().toPoint()
             self._win_off = (e.globalPosition().toPoint()
                              - self.window().frameGeometry().topLeft())
-            self._gesture.press(e.globalPosition().toPoint())
+            self._drag_dist = 0
+            self._dragging = False
         super().mousePressEvent(e)
 
     def mouseReleaseEvent(self, e):
@@ -278,26 +343,38 @@ class Live2DWidget(QOpenGLWidget):
             super().mouseReleaseEvent(e)
             return
 
-        pos = e.position()
-        global_pos = e.globalPosition().toPoint()
-        dragged = self._gesture.release(global_pos)
-        if dragged and self._win_off is not None:
-            # If Qt delivered no move event before release, still place the
-            # window at the final pointer position before ending the drag.
-            self.window().move(global_pos - self._win_off)
-        self._press_pos = None
-        self._win_off = None
-        self.setCursor(Qt.ArrowCursor)
+        # 判断是"点击"还是"拖动"。按位移像素数算，比按距离准。
+        dist = 0.0
+        if self._press_global_pos is not None:
+            d = e.globalPosition().toPoint() - self._press_global_pos
+            dist = (d.x() ** 2 + d.y() ** 2) ** 0.5
 
-        if dragged:
+        pos = e.position()
+        self._press_pos = None
+        self._press_global_pos = None
+        self._win_off = None
+
+        if self._dragging or dist >= 8:
+            self._dragging = False
+            self._suppress_double_click_until = time.monotonic() + 0.25
             self.drag_finished.emit()
-        elif self._alpha_at(pos.x(), pos.y()) > 24:
+            e.accept()
+            return
+        elif self._model_hit_at(pos.x(), pos.y()):
             # 点在角色身上才算数。周围那片透明的空气不响应——
             # 之前整个 260x380 的矩形都吃点击，动不动就误触。
             self.clicked.emit(self.hit_local(pos.x(), pos.y()))
         else:
             self.clicked.emit("")               # 空点，交给上层决定（比如什么都不做）
-        super().mouseReleaseEvent(e)
+        e.accept()
+
+    def mouseDoubleClickEvent(self, e):
+        # A drag can be reported as a double click by the window system when
+        # the release lands close to a second press.  Never forward that event.
+        if self._dragging or time.monotonic() < self._suppress_double_click_until:
+            e.accept()
+            return
+        super().mouseDoubleClickEvent(e)
 
     # 头顶往下这个比例以内算"头"
     HEAD_RATIO = 0.42
@@ -306,14 +383,11 @@ class Live2DWidget(QOpenGLWidget):
         """
         命中测试。返回 'Head' / 'Body' / ''。
 
-        ★ 不用 model.HitTest()。Hiyori 的 model3.json 里**只定义了一个
-        命中区叫 Body，没有 Head** —— 调 HitTest("Head") 永远返回 False，
-        点头的分支根本不会触发。
-
-        改成按几何分区：窗口上面 HEAD_RATIO 那块算头，其余算身体。
-        不依赖模型自带的命中区，换模型也能用。
+        Hiyori 的 model3.json 只定义了一个命中区叫 Body，没有 Head。
+        先通过实际不透明像素过滤透明区域，再按几何分区区分头和身体。
+        这样不会把整个 OpenGL 画布都当成可点击区域。
         """
-        if not (self._ready and self.model):
+        if not self._model_hit_at(px, py):
             return ""
         if py < self.height() * self.HEAD_RATIO:
             return "Head"

@@ -28,11 +28,6 @@ core
 core.*
 _t.py
 
-# PyInstaller output is a local release artifact, not source history.
-dist/
-build/
-AIPet.spec
-
 # Runtime model assets are versioned; large editing originals stay local.
 *.cmo3
 *.can3
