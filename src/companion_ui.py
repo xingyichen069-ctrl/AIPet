@@ -2,12 +2,9 @@
 from __future__ import annotations
 
 import math
-import json
 import sys
 import time
-from pathlib import Path
-from PySide6.QtCore import (Qt, QTimer, Signal, QUrl, QRectF, QPointF,
-                            QByteArray, Slot, QThread)
+from PySide6.QtCore import Qt, QTimer, Signal, QUrl, QRectF, QPointF, QByteArray, Slot
 from PySide6.QtGui import (QDesktopServices, QKeySequence, QShortcut, QTextCursor,
     QPainter, QColor, QPen, QPainterPath, QLinearGradient, QPalette, QFont)
 from PySide6.QtWidgets import (QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
@@ -20,7 +17,6 @@ from ui_theme import is_daytime, touhou_palette, theme_roles
 from theme_widgets import ThemeMenu, add_appearance_menu, draw_motif
 from native_glass import NativeGlass
 from desktop_state import DesktopState, Appearance
-from settings_ui import SettingsDialog
 
 STYLE = '''
 QWidget { color:#423936; font-size:13px; font-weight:400; }
@@ -47,7 +43,6 @@ QPushButton#sendButton:pressed { background:#7f2c29; }
 QPushButton#sendButton:disabled { background:#d1aaa1; border-color:#d1aaa1; }
 QPushButton#attachmentTag { background:#fff4db; border:1px solid #dfc793; color:#866238; text-align:left; }
 QPushButton#moreButton { font-size:19px; padding:0; background:transparent; border-color:#dfcebc; }
-QPushButton#updateButton { color:#8c3933; padding:0 8px; }
 QPushButton#attachButton { font-size:20px; padding:0; }
 QScrollArea { border:0; background:transparent; }
 QScrollBar:vertical { background:transparent; width:7px; margin:3px 0; }
@@ -82,7 +77,6 @@ QPushButton#sendButton:pressed { background:#8f3738; }
 QPushButton#sendButton:disabled { background:#624044; border-color:#624044; color:#c4aca7; }
 QPushButton#attachmentTag { background:#302b29; border-color:#76613d; color:#dfc28c; }
 QPushButton#moreButton { border-color:#655048; }
-QPushButton#updateButton { color:#f0c6b5; }
 QScrollBar::handle:vertical { background:#64515a; }
 QScrollBar::handle:vertical:hover { background:#99736f; }
 QMenu { background:#222633; border-color:#59474b; }
@@ -325,128 +319,7 @@ class Composer(QPlainTextEdit):
         event.acceptProposedAction()
 
 
-class AttachmentWorker(QThread):
-    """Read image/document attachments away from the Qt GUI thread."""
-
-    done = Signal(object)
-    failed = Signal(str)
-
-    def __init__(self, path):
-        super().__init__()
-        self.path = str(path)
-
-    def run(self):
-        try:
-            self.done.emit(C.read_attachment(self.path))
-        except (ValueError, OSError) as exc:
-            self.failed.emit(str(exc))
-        except Exception as exc:  # noqa: BLE001
-            self.failed.emit(f'{type(exc).__name__}: {exc}')
-
-
-class PluginWorker(QThread):
-    """Generate and activate one harness plugin without blocking the chat UI."""
-
-    done = Signal(object)
-    failed = Signal(str)
-
-    def __init__(self, request, root):
-        super().__init__()
-        self.request = str(request)
-        self.root = Path(root)
-
-    def run(self):
-        try:
-            import json
-            import brain as B
-            from harness.editor import GuidedEditor, OpenAICompatClient, default_target, summarize
-
-            thinking = json.loads((self.root / 'data' / 'thinking.json').read_text(encoding='utf-8'))
-            current = thinking.get('current', 'daily')
-            model = (thinking.get('presets', {}).get(current, {}).get('params', {}).get('model')
-                     or 'deepseek::deepseek-flash')
-            if '::' in model:
-                model = model.split('::', 1)[1]
-            editor = GuidedEditor(OpenAICompatClient(B.base_url(), B.api_key(), model))
-            draft = editor.turn(self.request)
-            result = summarize(draft)
-            if not draft.ready:
-                self.done.emit(result)
-                return
-            target = default_target(self.root, draft.plugin['name'])
-            applied = editor.apply(draft, target, self.root)
-            result['source'] = applied['source']
-            result['installation'] = applied['installation']
-            self.done.emit(result)
-        except Exception as exc:  # noqa: BLE001
-            self.failed.emit(f'{type(exc).__name__}: {exc}')
-
-
-class PluginLabDialog(QDialog):
-    """Small in-window front end for the standalone plugin harness."""
-
-    def __init__(self, root, parent=None):
-        super().__init__(parent)
-        self.root = Path(root)
-        self.worker = None
-        self.setWindowTitle('插件实验室 · 小日和')
-        self.resize(560, 520)
-        layout = QVBoxLayout(self)
-        intro = QLabel('告诉小日和想做什么插件。她会生成、测试、打包并启用；插件运行在 harness 隔离目录。')
-        intro.setWordWrap(True)
-        layout.addWidget(intro)
-        self.request = QPlainTextEdit()
-        self.request.setPlaceholderText('例如：写一个离线掷骰子插件，支持 --count、--sides 和 --seed。')
-        self.request.setPlainText('写一个离线掷骰子插件，支持 --count、--sides 和 --seed，输出 JSON。')
-        self.request.setFixedHeight(105)
-        layout.addWidget(self.request)
-        self.output = QPlainTextEdit()
-        self.output.setReadOnly(True)
-        self.output.setPlaceholderText('这里会显示生成、测试和启用结果。')
-        layout.addWidget(self.output, 1)
-        buttons = QHBoxLayout()
-        buttons.addStretch(1)
-        self.close_btn = QPushButton('关闭')
-        self.close_btn.clicked.connect(self.close)
-        buttons.addWidget(self.close_btn)
-        self.run_btn = QPushButton('让小日和生成并启用')
-        self.run_btn.setObjectName('sendButton')
-        self.run_btn.clicked.connect(self.start)
-        buttons.addWidget(self.run_btn)
-        layout.addLayout(buttons)
-
-    def start(self):
-        request = self.request.toPlainText().strip()
-        if not request or self.worker is not None:
-            return
-        self.output.setPlainText('小日和正在生成插件……\n\n窗口仍可响应，请稍候。')
-        self.run_btn.setEnabled(False)
-        self.request.setEnabled(False)
-        self.worker = PluginWorker(request, self.root)
-        self.worker.done.connect(self.completed)
-        self.worker.failed.connect(self.failed)
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.worker.finished.connect(self.worker_finished)
-        self.worker.start()
-
-    @Slot(object)
-    def completed(self, result):
-        self.output.setPlainText(json.dumps(result, ensure_ascii=False, indent=2))
-
-    @Slot(str)
-    def failed(self, message):
-        self.output.setPlainText('插件生成失败：' + message)
-
-    def worker_finished(self):
-        self.worker = None
-        self.run_btn.setEnabled(True)
-        self.request.setEnabled(True)
-
-
 class ChatWindow(QWidget):
-    # 后台代码任务在独立线程运行；用 Qt signal 把进度安全地送回界面线程。
-    task_update = Signal(str, str)  # (本地会话 id, 文本)
-
     def __init__(self, pet, worker_cls):
         super().__init__()
         self.pet, self.worker_cls = pet, worker_cls
@@ -466,9 +339,6 @@ class ChatWindow(QWidget):
         self._save_timer.setInterval(250)
         self._save_timer.timeout.connect(self._flush_ui)
         self.worker = None
-        self._pending_requests = []
-        self.attachment_worker = None
-        self.task_update.connect(self.on_task_update)
         self.attachment = None
         self.cur_reply = []
         self.cur_bubble = None
@@ -508,18 +378,6 @@ class ChatWindow(QWidget):
         subtitle.setObjectName('chatSubtitle')
         title.addWidget(subtitle)
         top.addLayout(title, 1)
-        self.update_btn = QPushButton('检查更新')
-        self.update_btn.setObjectName('updateButton')
-        self.update_btn.setFixedSize(72, 34)
-        self.update_btn.setToolTip('检查 AIPet 是否有新版本')
-        check_update = getattr(self.pet, '_check_update', None)
-        if callable(check_update):
-            self.update_btn.clicked.connect(check_update)
-        else:
-            # Small test hosts and lightweight embedders may provide a chat
-            # window without the full desktop controller.
-            self.update_btn.setEnabled(False)
-        top.addWidget(self.update_btn)
         more = QPushButton('···')
         more.setObjectName('moreButton')
         more.setFixedSize(34, 34)
@@ -568,7 +426,6 @@ class ChatWindow(QWidget):
         self.btn.setObjectName('sendButton')
         self.btn.setFixedSize(60, 40)
         self.btn.clicked.connect(self.send_or_stop)
-        self.btn.setToolTip('有文字时发送下一条指令；输入为空时停止当前回复')
         bottom.addWidget(self.btn)
         v.addLayout(bottom)
         hint = QLabel('Enter 发送  ·  Shift+Enter 换行')
@@ -659,8 +516,6 @@ class ChatWindow(QWidget):
     def prepare_quit(self):
         self._closing_application = True
         self._flush_ui()
-        if self.attachment_worker and self.attachment_worker.isRunning():
-            self.attachment_worker.requestInterruption()
 
     def hideEvent(self, event):
         if self._ui_ready and not self._closing_application and not self.isMinimized():
@@ -774,9 +629,6 @@ class ChatWindow(QWidget):
     def busy(self):
         return bool(self.worker and self.worker.isRunning())
 
-    def attachment_busy(self):
-        return bool(self.attachment_worker and self.attachment_worker.isRunning())
-
     def restore(self):
         while self.msgs.count() > 1:
             w = self.msgs.takeAt(0).widget()
@@ -839,7 +691,12 @@ class ChatWindow(QWidget):
         if self.busy():
             return
         f = self.store.focus()
-        self.head.setText('安静陪伴中' if f else '小日和')
+        try:
+            from persona_manager import PersonaManager
+            name = PersonaManager(M.ROOT).active().get('name') or '小日和'
+        except (ImportError, OSError, ValueError, TypeError):
+            name = '小日和'
+        self.head.setText(f'{name} · 安静陪伴中' if f else name)
 
     def message_menu(self, mid, bubble, pos):
         menu = ThemeMenu(self.appearance, self)
@@ -871,30 +728,16 @@ class ChatWindow(QWidget):
     def menu(self):
         menu = ThemeMenu(self.appearance, self, heading=True)
         a = menu.addAction('另起话题', self.new_topic)
-        a.setEnabled(not (self.busy() or self.attachment_busy()))
+        a.setEnabled(not self.busy())
         a = menu.addAction('以前的话题', self.old_topics)
-        a.setEnabled(not (self.busy() or self.attachment_busy()))
+        a.setEnabled(not self.busy())
         menu.addAction('查看约定', self.pet.companion.show_tasks)
-        menu.addAction('插件实验室', self.open_plugin_lab)
-        menu.addAction('设置', self.open_settings)
+        menu.addAction('人格管理', self.pet._open_persona_manager)
         add_appearance_menu(menu, self.appearance, self.change_appearance)
         if self.store.focus():
             menu.addAction('结束陪伴', self.pet.companion.stop_focus)
         menu.exec(self.mapToGlobal(self.rect().topRight()))
         menu.deleteLater()
-
-    def open_settings(self):
-        dialog = SettingsDialog(M.ROOT, self.appearance, self.pet, self)
-        dialog.saved.connect(self.refresh_head)
-        dialog.exec()
-
-    def open_plugin_lab(self):
-        if self.busy() or self.attachment_busy():
-            QMessageBox.information(self, '插件实验室', '请等当前对话完成后再生成插件。')
-            return
-        dialog = PluginLabDialog(M.ROOT, self)
-        dialog.setStyleSheet(self.appearance.stylesheet(glass_style(self._day), self._day))
-        dialog.exec()
 
     def change_appearance(self, key, value):
         try:
@@ -903,7 +746,7 @@ class ChatWindow(QWidget):
             QMessageBox.information(self, '外观', '外观设置暂时无法保存，请稍后再试。')
 
     def new_topic(self):
-        if self.busy() or self.attachment_busy():
+        if self.busy():
             return
         self._flush_ui()
         self.store.session(new=True)
@@ -912,9 +755,8 @@ class ChatWindow(QWidget):
         self.add_bubble('新话题开始了。以前的对话仍可在菜单中找回。', 'sys')
 
     def old_topics(self):
-        if self.busy() or self.attachment_busy():
-            return
-        sessions = self.store.sessions()
+        with self.store.db() as db:
+            sessions = db.execute('SELECT s.id,s.created,(SELECT text FROM messages WHERE session=s.id AND role=\'user\' AND status!=\'forgotten\' ORDER BY created LIMIT 1) AS title FROM sessions s ORDER BY created DESC LIMIT 50').fetchall()
         labels = [time.strftime('%m-%d %H:%M', time.localtime(s['created'])) + '  ' + (s['title'] or '空话题')[:36] for s in sessions]
         if not labels:
             return
@@ -923,7 +765,9 @@ class ChatWindow(QWidget):
         choice, ok = QInputDialog.getItem(self, '以前的话题', '选择要继续的话题：', labels, 0, False)
         if ok:
             self._flush_ui()
-            self.store.select_session(sessions[labels.index(choice)]['id'])
+            with self.store.db() as db:
+                db.execute('UPDATE sessions SET active=0')
+                db.execute('UPDATE sessions SET active=1 WHERE id=?', (sessions[labels.index(choice)]['id'],))
             self.restore()
             self._restore_draft()
 
@@ -938,51 +782,17 @@ class ChatWindow(QWidget):
             self.load_attachment(path)
 
     def load_attachment(self, path):
-        if self.attachment_busy():
-            return
-        suffix = Path(path).suffix.lower()
-        if suffix in C.IMAGE_SUFFIX or suffix in {'.docx', '.doc'}:
-            self.attachment_btn.setText('正在读取材料…')
-            self.attachment_btn.show()
-            self.attach_btn.setEnabled(False)
-            self.attachment_worker = AttachmentWorker(path)
-            self.attachment_worker.done.connect(self._attachment_ready)
-            self.attachment_worker.failed.connect(self._attachment_failed)
-            self.attachment_worker.finished.connect(self._attachment_finished)
-            self.attachment_worker.start()
+        if self.busy():
             return
         try:
-            self._attachment_ready(C.read_attachment(path))
-        except (ValueError, OSError) as e:
-            self._attachment_failed(str(e))
-
-    @Slot(object)
-    def _attachment_ready(self, attachment):
-        self.attachment = attachment
-        self.attachment_btn.setText('材料：' + self.attachment['name'] + '  ×')
-        self.attachment_btn.show()
-        self._flush_ui()
-
-    @Slot(str)
-    def _attachment_failed(self, message):
-        if self.attachment:
+            self.attachment = C.read_attachment(path)
             self.attachment_btn.setText('材料：' + self.attachment['name'] + '  ×')
-        else:
-            self.attachment_btn.hide()
-        if not self._closing_application:
-            QMessageBox.information(self, '材料', message)
-
-    @Slot()
-    def _attachment_finished(self):
-        worker = self.attachment_worker
-        self.attachment_worker = None
-        self.attach_btn.setEnabled(True)
-        if worker:
-            worker.deleteLater()
+            self.attachment_btn.show()
+            self._flush_ui()
+        except (ValueError, OSError) as e:
+            QMessageBox.information(self, '材料', str(e))
 
     def remove_attachment(self):
-        if self.attachment_busy():
-            return
         self.attachment = None
         self.attachment_btn.hide()
         self._flush_ui()
@@ -996,42 +806,22 @@ class ChatWindow(QWidget):
         event.acceptProposedAction()
 
     def send_or_stop(self):
-        if self.attachment_busy():
-            return
         if self.busy():
-            if self.input.toPlainText().strip():
-                self.send()
-            else:
-                self._request_stop()
+            self.stopping = True
+            self.emblem.finish(success=False)
+            self.worker.requestInterruption()
+            self.btn.setEnabled(False)
+            self.head.setText('正在停止…')
         else:
             self.send()
 
-    def _request_stop(self):
-        if not self.busy() or self.stopping:
-            return
-        self.stopping = True
-        self.emblem.finish(success=False)
-        self.worker.requestInterruption()
-        self.btn.setEnabled(False)
-        self.head.setText('正在停止…')
-
     def send(self):
         q = self.input.toPlainText().strip()
-        if self.attachment_busy() or (not q and not self.attachment):
+        if self.busy() or (not q and not self.attachment):
             return
         q = q or '请帮我解释这份材料。'
         if len(q) > 24000:
             QMessageBox.information(self, '消息较长', '请把消息缩短到 24,000 字以内。')
-            return
-        if self.busy():
-            queued_attachment = self.attachment
-            self._pending_requests.append((q, queued_attachment))
-            self.input.clear()
-            self.attachment = None
-            self.attachment_btn.hide()
-            self._flush_ui()
-            self.add_bubble('已收到新指令，上一条回复结束后继续。', 'sys')
-            self._request_stop()
             return
         self._scroll_bottom(force=True)
         try:
@@ -1080,45 +870,17 @@ class ChatWindow(QWidget):
         self.retry.hide()
         self.btn.setText('停止')
         self.btn.setEnabled(True)
-        # 思考期间仍允许输入。再次发送会先安全结束当前回复，再按顺序处理。
-        self.input.setEnabled(True)
-        self.attach_btn.setEnabled(True)
+        self.input.setEnabled(False)
+        self.attach_btn.setEnabled(False)
         self._scroll_bottom(force=True)
         self.head.setText('正在想…')
         self.emblem.start_waiting()
         self.pet.companion.activity('thinking')
         self.worker = self.worker_cls(query, history)
-        session = str(self._draft_session)
-        self.worker.task_context = {
-            'source': 'local',
-            'event': None,
-            'query': query,
-            'conversation_key': 'local:' + session,
-            'actor_id': 'local',
-            'actor_name': '本地窗口',
-            'is_owner': True,
-        }
-        # The callback is kept on the task so a result can arrive after the
-        # initial BrainWorker has finished. Qt queues the signal to this window.
-        self.worker.task_callback = lambda text, sid=session: self.task_update.emit(sid, text)
         self.worker.memory_message_id = "__ephemeral__" if self.ephemeral else self.current_id
         self.worker.chunk.connect(self.on_chunk)
         self.worker.finished.connect(self.on_done)
         self.worker.start()
-
-    @Slot(str, str)
-    def on_task_update(self, session, text):
-        text = (text or '').strip()
-        if not text:
-            return
-        current = str(self._draft_session)
-        label = text if session == current else '后台任务（原话题）\n' + text
-        self.add_bubble(label)
-        try:
-            self.store.add_message('assistant', text, status='complete', session=session)
-        except (ValueError, OSError):
-            pass
-        self._flush_ui()
 
     def on_chunk(self, kind, text):
         if self.stopping:
@@ -1142,7 +904,6 @@ class ChatWindow(QWidget):
     def on_done(self):
         reply = ''.join(self.cur_reply)
         state = 'cancelled' if self.stopping else 'failed' if self.had_error or not reply else 'complete'
-        pending = self._pending_requests.pop(0) if self._pending_requests else None
         if self.current_id:
             self.store.set_status(self.current_id, state)
             if reply:
@@ -1154,9 +915,9 @@ class ChatWindow(QWidget):
                     self.add_bubble('对话已保存，但长期记忆未写入：' + str(e), 'sys')
         elif self.ephemeral:
             self.add_bubble('本轮触发现有隐私过滤，未保存对话或材料。', 'sys')
-        if self.stopping and pending is None:
+        if self.stopping:
             self.add_bubble('已停止。', 'sys')
-        elif not reply and not self.had_error and not self.stopping:
+        elif not reply and not self.had_error:
             self.add_bubble('没有收到回复，可以重试。', 'sys')
         self.btn.setText('发送')
         self.btn.setEnabled(True)
@@ -1168,20 +929,6 @@ class ChatWindow(QWidget):
         self.pet.companion.tick()
         self.refresh_head()
         self.input.setFocus()
-        if pending is not None:
-            self.add_bubble('上一条已结束，开始处理新指令。', 'sys')
-            QTimer.singleShot(0, lambda item=pending: self._send_queued(*item))
-
-    def _send_queued(self, text, attachment=None):
-        if self.busy():
-            QTimer.singleShot(20, lambda: self._send_queued(text, attachment))
-            return
-        self.attachment = attachment
-        if attachment:
-            self.attachment_btn.setText('材料：' + attachment['name'] + '  ×')
-            self.attachment_btn.show()
-        self.input.setPlainText(text)
-        self.send()
 
     def closeEvent(self, event):
         event.ignore()

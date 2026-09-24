@@ -15,7 +15,7 @@ class WindowsLauncher(unittest.TestCase):
         with patch.object(W, '__file__', str(self.root / 'src' / 'windows_launcher.py')), \
              patch.object(W.sys, 'argv', ['windows_launcher.py']), \
              patch.object(W.sys, 'platform', 'test'), \
-             patch('app_entry.main', side_effect=RuntimeError('startup-test-error')):
+             patch.object(W.runpy, 'run_path', side_effect=RuntimeError('startup-test-error')):
             with self.assertRaisesRegex(RuntimeError, 'startup-test-error'):
                 W.main()
         self.assertEqual((sys.stdout, sys.stderr), original)

@@ -81,7 +81,7 @@ class PersonaRuntime(unittest.TestCase):
         self.assertEqual(payload['frequency_penalty'], 0.4)
         names={t['function']['name'] for t in payload['tools']}
         self.assertIn('agreement', names)
-        self.assertIn('code_task', names)
+        self.assertNotIn('code_task', names)
         self.assertNotIn('fs_write', names)
         for level in ('serious','deep','max','thunder'):
             payload,_ = B.build_payload('分析',level=level,system='test')

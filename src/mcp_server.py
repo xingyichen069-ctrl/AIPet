@@ -118,8 +118,8 @@ def _t_context(query: str) -> str:
 def _t_recall(query: str, limit: int | None = None) -> str:
     import memory as M
     import thinking as T
-    options = T.apply_to_memory(query=query)
-    hits = M.retrieve(query, top_k=limit, retrieval=options["retrieval"])
+    T.apply_to_memory(query)          # 让检索深度跟随面板档位
+    hits = M.retrieve(query, top_k=limit)
     if not hits:
         return "（没有相关记忆）"
     out = []

@@ -60,17 +60,15 @@ try:
     from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QLineEdit, QMenu,
                                    QPushButton, QScrollArea, QSizePolicy, QTextEdit,
                                    QVBoxLayout, QWidget)
-except ImportError as exc:
+except ImportError:
     print("需要 PySide6：\n"
           "    pip install PySide6\n"
           "或临时运行：\n"
-          "    uv run --with PySide6 --no-project python src/pet.py\n"
-          f"导入错误：{exc}")
+          "    uv run --with PySide6 --no-project python src/pet.py")
     sys.exit(1)
 
 import memory as M          # noqa: E402
 import thinking as T        # noqa: E402
-import update_lifecycle as UL  # noqa: E402
 from ui_theme import is_daytime
 from desktop_state import Appearance
 from theme_widgets import ThemeMenu, add_appearance_menu
@@ -295,23 +293,6 @@ class UpdateCheck(QThread):
                             "error": f"{type(e).__name__}: {e}"})
 
 
-class UpdateInstall(QThread):
-    """在后台下载并安装源码包，避免更新时冻结桌宠界面。"""
-    done = Signal(dict)
-
-    def __init__(self, ref: str, kind: str = "tag", parent=None):
-        super().__init__(parent)
-        self.ref, self.kind = ref, kind
-
-    def run(self):
-        try:
-            import update as UP
-            self.done.emit(UP.update(self.ref, self.kind))
-        except Exception as e:
-            self.done.emit({"ok": False, "updated": False,
-                            "error": f"{type(e).__name__}: {e}"})
-
-
 class BrainWorker(QThread):
     """在后台线程里调 API，避免阻塞界面。"""
     chunk = Signal(str, str)     # (kind, text)  kind: content / reasoning / error
@@ -324,11 +305,6 @@ class BrainWorker(QThread):
         super().__init__()
         self.query, self.history = query, history
         self.level_override = level_override
-        # ChatWindow fills in the session-specific key and a Qt signal callback.
-        # Keeping this on the worker preserves compatibility with test workers and
-        # lets the same brain context work for the desktop window and QQ bridge.
-        self.task_context = {}
-        self.task_callback = None
 
     def run(self):
         if not HAS_BRAIN:
@@ -336,28 +312,11 @@ class BrainWorker(QThread):
             return
         token = M.ACTIVE_MESSAGE.set(getattr(self, "memory_message_id", None))
         try:
-            import local_tools as LT
-            context = {
-                "source": "local",
-                "event": None,
-                "query": self.query,
-                "conversation_key": "local:desktop",
-                "actor_id": "local",
-                "actor_name": "本地窗口",
-                "is_owner": True,
-            }
-            context.update(dict(getattr(self, "task_context", {}) or {}))
-            callback = getattr(self, "task_callback", None)
-            if callback and not context.get("task_notify"):
-                context["task_notify"] = callback
-            with LT.bind_context(**context):
-                for kind, val in BRAIN.stream(self.query, self.history,
-                                              self.level_override,
-                                              cancelled=self.isInterruptionRequested):
-                    if kind == "level":
-                        self.level.emit(val)
-                    elif kind in ("content", "reasoning", "error", "tool"):
-                        self.chunk.emit(kind, val)
+            for kind, val in BRAIN.stream(self.query, self.history, self.level_override, cancelled=self.isInterruptionRequested):
+                if kind == "level":
+                    self.level.emit(val)
+                elif kind in ("content", "reasoning", "error", "tool"):
+                    self.chunk.emit(kind, val)
         except Exception as e:
             self.chunk.emit("error", f"{type(e).__name__}: {e}")
         finally:
@@ -559,7 +518,6 @@ class TypingDots(QWidget):
 
 
 from companion_ui import ChatWindow, CompanionController, open_local
-from gesture import DragGesture
 
 
 class ThinkingPanel(QWidget):
@@ -572,7 +530,6 @@ class ThinkingPanel(QWidget):
         self._drag_from: QPoint | None = None
         self._drag_start: QPoint | None = None
         self._dragged = False
-        self._gesture = DragGesture(QApplication.startDragDistance())
 
         # Use a normal window: macOS Tool windows float above regular apps.
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window
@@ -731,7 +688,7 @@ class ThinkingPanel(QWidget):
     def mouseMoveEvent(self, e):
         if self._drag_from is not None and e.buttons() & Qt.LeftButton:
             delta = e.globalPosition().toPoint() - self._drag_from
-            if self._gesture.move(e.globalPosition().toPoint()):
+            if self._dragged or delta.manhattanLength() >= QApplication.startDragDistance():
                 self._dragged = True
                 self.move(self._bounded_position(self._drag_start + delta))
                 self.setCursor(Qt.ClosedHandCursor)
@@ -769,14 +726,12 @@ class ThinkingPanel(QWidget):
         self._drag_from = e.globalPosition().toPoint()
         self._drag_start = self.pos()
         self._dragged = False
-        self._gesture.press(self._drag_from)
         self.setCursor(Qt.ClosedHandCursor)
 
     def mouseReleaseEvent(self, e):
         if e.button() != Qt.LeftButton or self._drag_from is None:
             return
-        dragged = self._gesture.release(e.globalPosition().toPoint())
-        if dragged:
+        if self._dragged:
             self.pet.state['thinking_panel_position'] = {'x': self.x(), 'y': self.y()}
             save_state(self.pet.state)
         self._drag_from = self._drag_start = None
@@ -941,9 +896,10 @@ class PetWindow(QWidget):
         self.state = load_state()
         self.pix = QPixmap(str(ensure_asset()))
         self.drag_from: QPoint | None = None
-        self._drag_origin: QPoint | None = None
-        self._gesture = DragGesture(QApplication.startDragDistance())
+        self._press_pos: QPoint | None = None
         self.dragged = False
+        self._dragging = False
+        self._suppress_double_click_until = 0.0
 
         flags = (Qt.FramelessWindowHint | Qt.Tool | Qt.NoDropShadowWindowHint)
         if self.state.get("topmost", True):
@@ -980,6 +936,7 @@ class PetWindow(QWidget):
             self.gl.clicked.connect(self._on_model_clicked)
             self.gl.drag_finished.connect(self._on_dragged)
             self.gl.hovered.connect(self._on_model_hover)
+            self.gl.reload_finished.connect(self._on_reload_finished)
             # 启动后把当前档位的表情应用上
             QTimer.singleShot(1200, lambda: self._sync_model_pose())
 
@@ -991,7 +948,6 @@ class PetWindow(QWidget):
         self.proxy_url: str = ""
         self.prober: ProxyProbe | None = None
         self.updater: UpdateCheck | None = None
-        self.installer: UpdateInstall | None = None
         self._restore_pos()
         self._watch_config()
         self.companion = CompanionController(self)
@@ -1024,7 +980,8 @@ class PetWindow(QWidget):
         self.show_bubble("网络走代理了。" if result else "网线直着，也行。", 2400)
 
     # ── 检查更新 ────────────────────────────────────────────────
-    # 只在手动点的时候查，平时零网络请求。查到有新版后由用户点按钮安装。
+    # 只在手动点的时候查，平时零网络请求。查到有新版也不自己下 ——
+    # 只给版本号和下载页，更不更新是人的事（update.py 开头写了为什么）。
 
     def _check_update(self):
         if self.updater and self.updater.isRunning():
@@ -1053,37 +1010,12 @@ class PetWindow(QWidget):
         box.setText(f"有新版本 {r['latest_clean']}。")
         box.setInformativeText(
             f"本机是 {r['current']}。\n\n"
-            f"更新器会先备份将被覆盖的公开代码文件；个人数据、密钥和运行环境不会覆盖。")
-        install = box.addButton("下载并安装", QMessageBox.AcceptRole)
-        go = box.addButton("打开下载页", QMessageBox.ActionRole)
+            f"这里不会替你下载或覆盖任何东西 —— 打开下载页，你自己决定。")
+        go = box.addButton("打开下载页", QMessageBox.AcceptRole)
         box.addButton("以后再说", QMessageBox.RejectRole)
         box.exec()
-        if box.clickedButton() is install:
-            self._install_update(r)
-        elif box.clickedButton() is go:
+        if box.clickedButton() is go:
             QDesktopServices.openUrl(QUrl(r["url"]))
-
-    def _install_update(self, result: dict):
-        if self.installer and self.installer.isRunning():
-            self.show_bubble("更新已经在路上了。", 1600)
-            return
-        self.show_bubble("正在下载更新。", 2200)
-        self.installer = UpdateInstall(result.get("latest", ""), "tag", self)
-        self.installer.done.connect(self.on_update_install_done)
-        self.installer.start()
-
-    def on_update_install_done(self, result: dict):
-        if not result.get("ok") or not result.get("updated"):
-            QMessageBox.warning(self, "安装更新", f"更新没有完成。\n\n{result.get('error', '没有可安装的更新。')}")
-            return
-        changed = len(result.get("changed") or [])
-        box = QMessageBox(self)
-        box.setWindowTitle("更新完成")
-        box.setText(f"已经安装 {result.get('ref', '新版本')}，更新了 {changed} 个公开文件。")
-        box.setInformativeText(
-            "请退出并重新启动桌宠使代码生效。若 QQ 桥正在运行，也请重新启动 QQ 桥。\n\n"
-            f"更新前备份：{result.get('backup') or '没有需要备份的文件'}")
-        box.exec()
 
     # ---------------------------------------------------------- 对话窗口
 
@@ -1099,16 +1031,19 @@ class PetWindow(QWidget):
         if self.chat.input.toPlainText() == "":
             self.chat.input.setFocus()
 
-    def open_settings(self):
-        from settings_ui import SettingsDialog
-        dialog = SettingsDialog(ROOT, self.appearance, self, self)
-        dialog.saved.connect(self.panel.update)
-        dialog.exec()
-
     def mouseDoubleClickEvent(self, e):
-        if e.button() == Qt.LeftButton:
+        if e.button() != Qt.LeftButton:
+            e.ignore()
+            return
+        # 某些窗口系统会在拖动结束后补发一次 double-click。拖动完成后的
+        # 短暂屏蔽窗口级双击，避免移动桌宠时误开对话框。
+        if self._dragging or time.monotonic() < self._suppress_double_click_until:
+            e.accept()
+            return
+        if self._body_at(e.position()):
             self.open_chat()
             self.dragged = True          # 别让双击后的 release 触发面板切换
+        e.accept()
 
     # ---------------------------------------------------------- 位置
 
@@ -1236,37 +1171,58 @@ class PetWindow(QWidget):
 
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
-            point = e.globalPosition().toPoint()
-            self.drag_from = point - self.frameGeometry().topLeft()
-            self._drag_origin = point
-            self._gesture.press(point)
+            self.drag_from = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self._press_pos = e.globalPosition().toPoint()
             self.dragged = False
+            self._dragging = False
         elif e.button() == Qt.RightButton:
             self._menu(e.globalPosition().toPoint())
 
     def mouseMoveEvent(self, e):
         if self.drag_from is not None and (e.buttons() & Qt.LeftButton):
-            point = e.globalPosition().toPoint()
-            if self._gesture.move(point):
-                self.dragged = True
-                self.move(point - self.drag_from)
+            if self._press_pos is not None:
+                delta = e.globalPosition().toPoint() - self._press_pos
+                if self._dragging or delta.manhattanLength() >= QApplication.startDragDistance():
+                    self._dragging = True
+                    self.dragged = True
+            self.move(e.globalPosition().toPoint() - self.drag_from)
             if self.panel.isVisible():
                 self.panel.reposition()
 
     def mouseReleaseEvent(self, e):
         if e.button() == Qt.LeftButton:
-            point = e.globalPosition().toPoint()
-            was_dragged = self.dragged
-            dragged = self._gesture.release(point) or was_dragged
-            if dragged:
-                if not was_dragged and self.drag_from is not None:
-                    # Handle a press/release jump where Qt sent no move event.
-                    self.move(point - self.drag_from)
+            if self._dragging or self.dragged:
                 self._persist()
-            else:
+                self._suppress_double_click_until = time.monotonic() + 0.25
+            elif self._body_at(e.position()):
                 self._toggle_panel()
             self.drag_from = None
-            self._drag_origin = None
+            self._press_pos = None
+            self._dragging = False
+
+    def _body_at(self, pos) -> bool:
+        """Guard parent-window fallbacks so transparent canvas space is inert."""
+        if self.gl is None:
+            # 静态图模式也只接受图片实际有内容的像素；PNG 周围的透明边缘
+            # 不应因为落在窗口矩形里就触发面板或对话框。
+            try:
+                if self.pix.isNull():
+                    return False
+                image = self.pix.toImage()
+                x = int(pos.x() * image.width() / max(1, self.width()))
+                y = int(pos.y() * image.height() / max(1, self.height()))
+                if not (0 <= x < image.width() and 0 <= y < image.height()):
+                    return False
+                return image.pixelColor(x, y).alpha() > 24
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                return False
+        try:
+            local = self.gl.mapFrom(self, pos.toPoint())
+            # 对话框和思考面板都只由身体区域触发；头部点击仍交给
+            # Live2D 自己的反馈逻辑，不会在双击时绕过这个限制开对话。
+            return self.gl.hit_local(local.x(), local.y()) == "Body"
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return False
 
     def _toggle_panel(self):
         if self.panel.isVisible() and self.panel.windowOpacity() > 0.5:
@@ -1302,7 +1258,6 @@ class PetWindow(QWidget):
     def _build_menu(self):
         m = ThemeMenu(self.appearance, self, heading=True)
         m.addAction("打开对话", self.open_chat)
-        m.addAction("打开设置", self.open_settings)
         m.addAction("查看约定", self.companion.show_tasks)
         if self.companion.store.focus():
             m.addAction("结束陪伴", self.companion.stop_focus)
@@ -1310,6 +1265,7 @@ class PetWindow(QWidget):
             m.addAction("安静陪伴半小时", self._start_company)
         m.addSeparator()
         m.addAction("打开记忆面板", self._open_memory_view)
+        m.addAction("人格管理", self._open_persona_manager)
 
         # ── QQ ──────────────────────────────────────────────
         # 状态从 data/qq_status.json 读。QQ 桥是**独立进程**，
@@ -1320,7 +1276,7 @@ class PetWindow(QWidget):
         if qs["state"] == "ready":
             m.addAction("查看群里的人", self._show_people)
         else:
-            off = m.addAction("QQ 没在跑（设置页或 AIPet.exe qq start）")
+            off = m.addAction("QQ 没在跑（用 tools/qq_ctl.py start 启动）")
             off.setEnabled(False)
         add_appearance_menu(m, self.appearance)
         advanced = m.addMenu("高级")
@@ -1473,12 +1429,22 @@ class PetWindow(QWidget):
         if self.gl is None:
             self.show_bubble("当前是静态图模式。")
             return
-        try:
-            self.gl.model.LoadModelJson(str(M.ROOT / L2D_CFG["model"]))
-            self.gl.play_idle()
+        if not self.gl.request_reload(M.ROOT / L2D_CFG["model"]):
+            self.show_bubble("模型还没准备好。")
+            return
+        self.show_bubble("正在换模型…", 1800)
+
+    def _on_reload_finished(self, success: bool, message: str):
+        if success:
             self.show_bubble("换好了。")
-        except Exception as e:                       # noqa: BLE001
-            self.show_bubble(f"换模型失败：{e}")
+        else:
+            self.show_bubble(f"换模型失败：{message}")
+
+    def _open_persona_manager(self):
+        from persona_ui import open_persona_manager
+        open_persona_manager(self)
+        if self.chat:
+            self.chat.refresh_head()
 
     def _open_config(self):
         import os
@@ -1532,7 +1498,6 @@ def main() -> None:
         pet.tray = QSystemTrayIcon(QIcon(str(CHAR_PNG)), pet)
         tray_menu = ThemeMenu(pet.appearance, pet, heading=True)
         tray_menu.addAction("打开对话", pet.open_chat)
-        tray_menu.addAction("打开设置", pet.open_settings)
         tray_menu.addAction("显示桌宠 / 恢复点击", pet.reveal)
         add_appearance_menu(tray_menu, pet.appearance)
         tray_menu.addAction("退出", pet.quit_safely)
@@ -1564,14 +1529,7 @@ def main() -> None:
     # 太吵，结果会显示在对话窗口标题和右键菜单里。
     QTimer.singleShot(1200, lambda: pet.probe_proxy(announce=False))
 
-    # A detached package installer publishes a cooperative stop request. The
-    # desktop exits through its normal bounded shutdown path; it is never
-    # terminated by PID from the updater.
-    update_timer = QTimer(pet)
-    update_timer.timeout.connect(lambda: pet.quit_safely() if UL.pending(ROOT) else None)
-    update_timer.start(250)
-    with UL.registered(ROOT, "desktop"):
-        sys.exit(app.exec())
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":

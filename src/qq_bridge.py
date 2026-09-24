@@ -28,7 +28,7 @@ QQ 规定被动回复必须**5 分钟内**发出，否则吃 40034128。
 而 thinking.json 里的 deep/max 档，思维链能跑好几分钟。
 在桌宠里没问题（你等得起），群里就是稳定超时。
 
-普通群聊默认走 daily。群成员可以用档位指令切换本群档位；
+普通群聊默认跟随桌面档位。群成员可以用档位指令切换本群档位；
 神格状态（雷霆大思考）会放宽记忆和回复额度，但仍受 QQ 的 5 分钟被动回复窗口约束。
 
 ★ 但**额度不是时间闸**。给多少 token 和"会不会超时"是两件事：
@@ -58,7 +58,6 @@ import local_tools as LT  # noqa: E402
 import people as P  # noqa: E402
 import qq_bot as QB  # noqa: E402
 import qq_text as QT  # noqa: E402
-import update_lifecycle as UL  # noqa: E402
 
 if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("-", "") != "utf8":
     try:
@@ -344,8 +343,7 @@ def build_system(ev: QB.QQEvent) -> tuple[str, dict]:
     with PR.bind(M.ROOT) as pid:
         options.update(persona_id=pid, persona_examples=True)
         ctx = M.build_context(ev.content, retrieval=options["retrieval"])
-        platform = (f"QQ 回复使用纯文本，不发链接，不用 Markdown，控制在 {REPLY_CHARS_HINT} 个中文字以内。\n"
-                    "对方明确要求制作文件或运行代码时，可调用 code_task；实际权限由工具入口检查。")
+        platform = f"QQ 回复使用纯文本，不发链接，不用 Markdown，控制在 {REPLY_CHARS_HINT} 个中文字以内。"
         system = "\n\n---\n\n".join([T.system_block(ev.content, resolved=options), ctx,
                     platform, "开头的示例对话只示范语气，不是本次会话经历。", M.persona_text()])
     return system, {"level": level, "options": options}
@@ -767,7 +765,7 @@ class Bridge:
             #   主人的记忆里有这条规矩，但记忆是说服，这里是拦。
             blocked = {"run_python"}
             if not who["is_owner"]:
-                blocked |= {"see_image", "code_task"}
+                blocked |= {"see_image"}
             with LT.bind_context(
                     source="qq", event=ev, conversation_key=conv_key(ev),
                     actor_id=who.get("id", ""), actor_name=who.get("name", ""),
@@ -1120,7 +1118,7 @@ def selftest() -> int:
 # ═══════════════════════════════════════════════════════════════
 
 def run(reply_enabled: bool = True) -> int:
-    from PySide6.QtCore import QCoreApplication, QTimer
+    from PySide6.QtCore import QCoreApplication
     import brain as B
 
     app = QCoreApplication(sys.argv)
@@ -1148,21 +1146,7 @@ def run(reply_enabled: bool = True) -> int:
     )
     gw.start()
     log(f"跑起来了（{'会回复' if reply_enabled else '只收不发'}）。Ctrl+C 停。")
-    update_timer = QTimer()
-
-    def stop_for_update():
-        if UL.pending(M.ROOT):
-            gw.stop()
-            app.quit()
-
-    update_timer.timeout.connect(stop_for_update)
-    update_timer.start(250)
-    try:
-        with UL.registered(M.ROOT, "qq"):
-            return app.exec()
-    finally:
-        update_timer.stop()
-        gw.stop()
+    return app.exec()
 
 
 def main() -> None:
