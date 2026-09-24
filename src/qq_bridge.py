@@ -70,8 +70,7 @@ if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("
 # 被动回复 5 分钟。留一分钟给发送本身，取 240 秒。
 REPLY_BUDGET_S = 240
 
-# 群聊默认日常；每个群可以用指令切换自己的档位。
-GROUP_LEVEL = "daily"
+# 群聊默认跟随桌面；每个群可以用指令覆盖或恢复跟随。
 
 # ★ max_tokens 是**思维链和正文共享的**。
 #   踩过两次：
@@ -89,7 +88,6 @@ GROUP_MAX_TOKENS = 10500
 GROUP_THUNDER_MAX_TOKENS = 120000
 
 # 单聊没有 5 分钟的紧迫感，但输出长度限制是一样的
-C2C_LEVEL = None            # None = 跟随 thinking.json
 C2C_MAX_TOKENS = 10500
 
 # ★ 给模型看的长度上限，必须和 qq_text.QQ_SAFE_BYTES 对得上。
@@ -131,14 +129,15 @@ def _group_levels_load() -> dict:
 
 
 def group_level_for(group_openid: str) -> str:
-    """读取本群档位；没有设置时使用普通群聊默认档。"""
+    """读取本群覆盖档位；未设置的群跟随桌面。"""
+    import thinking as T
+    fallback = T.current_level()
     group_openid = str(group_openid or "").strip()
     if not group_openid:
-        return GROUP_LEVEL
+        return fallback
     with _group_level_lock:
-        level = str(_group_levels_load().get(group_openid) or GROUP_LEVEL)
-    import thinking as T
-    return level if level == "auto" or level in T.load().get("presets", {}) else GROUP_LEVEL
+        level = str(_group_levels_load().get(group_openid) or fallback)
+    return level if level == "auto" or level in T.load().get("presets", {}) else fallback
 
 
 def set_group_level(group_openid: str, level: str) -> None:
@@ -148,7 +147,10 @@ def set_group_level(group_openid: str, level: str) -> None:
         raise ValueError("缺少群标识")
     with _group_level_lock:
         values = _group_levels_load()
-        values[group_openid] = level
+        if level == "follow":
+            values.pop(group_openid, None)
+        else:
+            values[group_openid] = level
         GROUP_LEVEL_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = GROUP_LEVEL_FILE.with_name(
             GROUP_LEVEL_FILE.name + f".{threading.get_ident()}.tmp")
@@ -236,7 +238,7 @@ def hist_append(key: str, role: str, name: str, text: str) -> None:
         items.append({
             "role": role,                     # user | assistant
             "name": name,
-            "text": text[:300],
+            "text": text[:8000],
             "ts": M.now_iso(),
         })
         d[key] = items[-HIST_STORAGE_MAX:]    # 神格状态需要更长的上下文，读取时再按档位截
@@ -311,86 +313,45 @@ def identify(ev: QB.QQEvent) -> dict:
 #  组装
 # ═══════════════════════════════════════════════════════════════
 
+def history_messages(ev: QB.QQEvent) -> list[dict]:
+    limit = THUNDER_HIST_MAX if ev.scene == "group" and group_level_for(ev.group_openid) == "thunder" else HIST_MAX
+    messages = []
+    items = hist_for(conv_key(ev), limit)
+    if items and items[-1].get("role") == "user" and items[-1].get("text") == ev.content[:8000]:
+        items = items[:-1]
+    for item in items:
+        role = item.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        text = item.get("text", "")
+        if role == "user" and ev.scene == "group":
+            text = f"{item.get('name') or '群友'}：{text}"
+        messages.append({"role": role, "content": text})
+    return messages
+
+
 def build_prompt(ev: QB.QQEvent, who: dict) -> str:
-    """
-    拼出发给模型的东西。
-
-    ★ 身份放在**最前面**。它是底色 —— 后面所有内容都要按
-      "谁在说话"来理解。放在末尾容易被当成补充说明。
-    """
-    # 用 get 而不是 [] —— 身份块缺失是可以接受的降级，
-    # 但不该让整个回复崩掉（一条消息回不了比少一句上下文严重得多）。
-    parts = [who.get("block") or ""]
-
-    # ★ 历史放在身份之后、当前消息之前。
-    #   这个顺序是有讲究的：先知道"谁在说"，再看"刚才说了什么"，
-    #   最后才是"现在这句" —— 跟人读聊天记录的次序一致。
-    hist = hist_block(ev)
-    if hist:
-        parts.append(hist)
-
-    where = "群里" if ev.scene == "group" else "私聊"
-    lines = ["", f"## 他{where}对你说", "", ev.content]
-
-    if ev.scene == "group":
-        lines += [
-            "",
-            "★ 这是群聊。他只 @ 了你一个人，但群里还有别人看得到你的回复。",
-            f"★ 回复要短 —— QQ 限 {REPLY_CHARS_HINT} 中文字以内，而且群里刷得快。",
-            "★ 群里有别人在看。他说的话、你说的话，都不是私密的。",
-        ]
-    else:
-        lines += ["", "★ 这是私聊，只有他看得到。可以放松一点。",
-                  f"★ 回复仍然要短，QQ 限 {REPLY_CHARS_HINT} 中文字以内。"]
-
-    if who.get("is_owner"):
-        lines += [
-            "",
-            "★ 如果主人明确要你写程序、运行代码、生成图片/报告/文件或反复调试，"
-            "调用 code_task 把它交给后台本地代码任务；不要在这条普通回复里假装已经做完。"
-            "普通问答和解释不需要调用。",
-        ]
-
-    parts.append("\n".join(lines))
-    return "\n".join(parts)
+    where = "群聊" if ev.scene == "group" else "私聊"
+    return "\n\n".join(p for p in [who.get("block", ""),
+        f"{who.get('name') or '对方'}在{where}对你说：\n{ev.content}"] if p)
 
 
 def build_system(ev: QB.QQEvent) -> tuple[str, dict]:
-    """
-    人格 + 记忆 + 平台约束。
-
-    走 brain.build_system 的话会带上桌宠的 system_block（思考档位的
-    那一堆说明），那在群里是多余的。这里自己拼，只保留有用的部分。
-    """
     import thinking as T
-
-    level = group_level_for(ev.group_openid) if ev.scene == "group" else C2C_LEVEL
-    # 让这一轮记忆检索用上这个档位的预算，不改变进程级配置。
+    import persona_runtime as PR
+    level = group_level_for(ev.group_openid) if ev.scene == "group" else T.current_level()
     options = T.apply_to_memory(level, ev.content)
-
-    persona = M.persona_text()
-    ctx = M.build_context(ev.content, retrieval=options["retrieval"])
-
-    platform = (
-        "## 你现在在 QQ 上说话\n\n"
-        "三条硬限制，违反了整条消息发不出去：\n"
-        f"1. 不发链接。要提来源就说名字。\n"
-        f"2. {REPLY_CHARS_HINT} 个中文字以内。超了会被硬截断，"
-        f"句子会断在半截 —— 所以宁可说少点，说完。\n"
-        "3. 不用 Markdown。「」比 ** 好用。\n\n"
-        "代码层面还有一道兜底会再洗一遍，但被洗过的消息会缺东西，"
-        "不如你自己就别写。\n\n"
-        "★ 短不等于敷衍。把一件事**说清楚**比说得多重要 ——"
-        "该给的理由给完，然后停。"
-    )
-
-    system = "\n\n---\n\n".join(p for p in [persona, ctx, platform] if p)
+    with PR.bind(M.ROOT) as pid:
+        options.update(persona_id=pid, persona_examples=True)
+        ctx = M.build_context(ev.content, retrieval=options["retrieval"])
+        platform = (f"QQ 回复使用纯文本，不发链接，不用 Markdown，控制在 {REPLY_CHARS_HINT} 个中文字以内。\n"
+                    "对方明确要求制作文件或运行代码时，可调用 code_task；实际权限由工具入口检查。")
+        system = "\n\n---\n\n".join([T.system_block(ev.content, resolved=options), ctx,
+                    platform, "开头的示例对话只示范语气，不是本次会话经历。", M.persona_text()])
     return system, {"level": level, "options": options}
 
 
-# ═══════════════════════════════════════════════════════════════
-#  图片
-# ═══════════════════════════════════════════════════════════════
+
 
 MEDIA_DIR = M.ROOT / "data" / "qq_media"
 
@@ -621,8 +582,11 @@ def command_reply(ev: QB.QQEvent, who: dict) -> str | None:
     arg = (m.group(2) or "").strip().lower()
     if not arg:
         cur = group_level_for(ev.group_openid) if ev.scene == "group" else T.current_level()
-        return f"现在是「{names.get(cur, cur)}」\n可选：{opts}"
+        return f"现在是「{names.get(cur, cur)}」\n可选：{opts}。群聊可用 /档位 跟随 恢复跟随桌面。"
 
+    if ev.scene == "group" and arg in ("follow", "跟随", "跟随桌面"):
+        set_group_level(ev.group_openid, "follow")
+        return "本群之后跟随桌面的档位。"
     lv = LEVEL_ALIAS.get(arg)
     if not lv:
         # ★ 认不出来就交回模型，别自作主张回"没这个档位"。
@@ -809,7 +773,7 @@ class Bridge:
                     actor_id=who.get("id", ""), actor_name=who.get("name", ""),
                     is_owner=bool(who.get("is_owner"))):
                 reply, _reasoning, info = B.ask_with_system(
-                    prompt, system,
+                    prompt, system, history=history_messages(ev),
                     level=meta["level"], max_tokens=budget,
                     block_tools=blocked, options=meta.get("options"),
                     deadline=deadline)
@@ -837,13 +801,15 @@ class Bridge:
 
         # ── 记 ──
         self._remember(ev, who, receipt.text)
-        self._log_mood(ev)
+        self._log_mood(ev, meta["options"].get("persona_id"))
 
-    def _log_mood(self, ev: QB.QQEvent) -> None:
+    def _log_mood(self, ev: QB.QQEvent, persona_id=None) -> None:
         """每轮回完落一行当时的状态。规矩写在 SOUL.md 里。"""
         try:
             import mood as MD
-            MD.write_log(ev.content, source=f"qq:{ev.scene}")
+            import persona_runtime as PR
+            with PR.bind(M.ROOT, persona_id):
+                MD.write_log(ev.content, source=f"qq:{ev.scene}")
         except Exception as e:
             log(f"mood 日志出错：{type(e).__name__}: {e}")
 
@@ -948,10 +914,10 @@ def selftest() -> int:
         pr = build_prompt(ev3, identify(ev3))
         check("身份排在最前面", pr.index("现在说话的是") < pr.index("对你说"))
         check("带上了消息内容", "今天几号" in pr)
-        check("群聊提醒了要短", "群里刷得快" in pr)
+        check("群聊标识", "群聊" in pr)
         ev4 = _fake(scene="c2c", oid="AAA1")
         check("私聊有不同说法",
-              "只有他看得到" in build_prompt(ev4, identify(ev4)))
+              "私聊" in build_prompt(ev4, identify(ev4)))
         check("身份块缺失也不崩", build_prompt(ev4, {}).strip() != "")
         check("提醒了三条硬限制",
               all(k in build_system(ev3)[0]

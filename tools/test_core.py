@@ -22,7 +22,7 @@ def main() -> int:
     work.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="core-tests-", dir=work) as name:
         root = Path(name)
-        for directory in ("src", "tests", "themes", "assets", "tools"):
+        for directory in ("src", "tests", "themes", "assets", "tools", "persona_defaults"):
             shutil.copytree(PROJECT / directory, root / directory,
                             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         (root / "data").mkdir()

@@ -48,8 +48,12 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import random
 import sys
+import threading
+from functools import wraps
+import persona_runtime as PR
 from datetime import timedelta
 from pathlib import Path
 
@@ -229,52 +233,36 @@ def suggest(text: str) -> list[dict]:
 
 
 def suggest_block(text: str) -> str:
-    """
-    把建议拼成注入文本。
-
-    已经在某个状态里就不提了 —— 停着的时候再看到一堆选项，
-    只会让她想换，那跟"不频繁换"是矛盾的。
-    """
-    # 他明确开口了 —— 这不是建议，是指令，单独说
-    cmd = [c for c in COMMANDS if c in text]
-    if cmd:
-        lines = [
-            "## 他明确要你换个样子",
-            "",
-            f"他说了「{cmd[0]}」。这是要求，不是暗示。",
-            "",
-            "调 mood 工具照做：他说要可爱就 set 软毛，说要正常就 clear。",
-            "**force=true**，冷却对他不适用 —— 他有权，"
-            "冷却拦的是你自己频频换，不是拦他。",
-            "换个什么由你判断，他那句话的语气里带着答案。",
-            "",
-            "顶一句「行吧。」可以。但该换就换。",
-        ]
-        return "\n".join(lines)
-
     if active(peek=True):
         return ""
-    hits = suggest(text)
+    if any(c in text for c in COMMANDS):
+        return "如对方确实在请求切换心情，可用 mood 的 list 查看当前人格的选项，再决定是否切换。"
+    hits = [h for h in suggest(text) if h["key"] in catalog()]
     if not hits:
         return ""
-
-    lines = ["## 他刚说的话里，有几个地方碰到你了", ""]
-    for h in hits:
-        lines.append(f"- 听到「{h['hit']}」→ 可以停到「{h['key']}」：{h['why']}")
-    lines += [
-        "",
-        "**挑不挑随你。**这只是摆出来给你看，不是命令。",
-        "不想换就照常答 —— 平常的样子也很好。",
-        "想停就调 mood 工具，顺手写一句由头。",
-    ]
-    return "\n".join(lines)
+    return "可选心情（不必切换）：" + "、".join(h["key"] for h in hits[:2])
 
 
 # ═══════════════════════════════════════════════════════════════
 #  读写
 # ═══════════════════════════════════════════════════════════════
 
-_cache: dict = {"mtime": 0.0, "data": None}
+_lock = threading.RLock()
+
+
+def _serialized(fn):
+    @wraps(fn)
+    def call(*args, **kwargs):
+        with _lock:
+            return fn(*args, **kwargs)
+    return call
+
+
+def state_file():
+    pid = PR.active_id(M.ROOT)
+    return M.ROOT / "data" / "mood.json" if pid == "hiyori" else M.ROOT / "data/moods" / (pid + ".json")
+
+
 
 
 def _blank() -> dict:
@@ -282,59 +270,53 @@ def _blank() -> dict:
 
 
 def snapshot() -> dict:
-    """
-    拿一份可以随便改的副本。
-
-    ★ 必须用它做"改前备份"。load() 返回的是缓存里那个 dict **本身**，
-      不是拷贝 —— 备份时直接拿 load() 的结果，之后任何写入都会
-      连备份一起改掉，恢复时等于把改过的状态写回去。
-      自检里踩过一次：心理点残留进了历史，还触发了冷却。
-    """
+    """A detached copy suitable for backups and transactional edits."""
     return copy.deepcopy(load())
 
 
+@_serialized
 def load(force: bool = False) -> dict:
-    """
-    带 mtime 缓存。改了文件立刻生效，不用重启。
-
-    ★ 返回的是缓存对象本身，不是副本。只读没问题；
-      要改动或要留备份，先 snapshot()。
-    """
-    try:
-        mtime = MOOD_FILE.stat().st_mtime
-    except OSError:
+    # Small files are read fresh; switching persona never reuses another cache.
+    data = PR.read_json(state_file(), None)
+    if not isinstance(data, dict) or not isinstance(data.get("history", []), list):
         return _blank()
-
-    if force or mtime != _cache["mtime"] or _cache["data"] is None:
-        try:
-            with open(MOOD_FILE, encoding="utf-8") as f:
-                _cache["data"] = json.load(f)
-            _cache["mtime"] = mtime
-        except (json.JSONDecodeError, OSError):
-            # 文件坏了就当没有状态。不能让一个坏文件把整个脑子拖死。
-            return _blank()
-    return _cache["data"]
+    if not isinstance(data.get("rules", {}), dict):
+        data["rules"] = {}
+    return data
 
 
+@_serialized
 def save(cfg: dict) -> None:
-    MOOD_FILE.parent.mkdir(parents=True, exist_ok=True)
-    MOOD_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2),
-                         encoding="utf-8")
-    _cache["mtime"] = 0.0
+    path = state_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
 
 
 def rules() -> dict:
-    return {**RULES, **load().get("rules", {})}
+    result = dict(RULES)
+    for key, value in load().get("rules", {}).items():
+        if key in result and isinstance(value, (int, float)) and math.isfinite(value) and value >= 0:
+            result[key] = value
+    result["max_hours"] = max(result["min_hours"], result["max_hours"])
+    return result
+
+
+def _timestamp(value):
+    parsed = M.parse_ts(value)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=M.now().tzinfo)
 
 
 def catalog() -> dict:
-    return CATALOG
+    return PR.mood_catalog(M.ROOT, CATALOG)
 
 
 # ═══════════════════════════════════════════════════════════════
 #  当前状态
 # ═══════════════════════════════════════════════════════════════
 
+@_serialized
 def active(peek: bool = False) -> dict | None:
     """
     现在停在哪个心理点。过期了就地清掉。
@@ -344,23 +326,30 @@ def active(peek: bool = False) -> dict | None:
     """
     cfg = load()
     cur = cfg.get("current")
-    if not cur:
+    if not isinstance(cur, dict) or cur.get("key") not in catalog():
+        return None
+    if cur.get("profile", PR.active_id(M.ROOT)) != PR.mood_profile(M.ROOT):
+        return None
+    try:
+        _timestamp(cur["until"])
+        _timestamp(cur["since"])
+    except (KeyError, TypeError, ValueError):
         return None
 
-    if M.now() >= M.parse_ts(cur["until"]):
+    if M.now() >= _timestamp(cur["until"]):
         if not peek:
             _retire(cfg, cur)
         return None
 
-    since = M.parse_ts(cur["since"])
-    until = M.parse_ts(cur["until"])
+    since = _timestamp(cur["since"])
+    until = _timestamp(cur["until"])
     total = (until - since).total_seconds()
     left = (until - M.now()).total_seconds()
 
     cur = dict(cur)
     cur["left_min"] = max(0, int(left // 60))
     cur["fading"] = total > 0 and (left / total) < FADE_RATIO
-    cur["catalog"] = CATALOG.get(cur["key"], {})
+    cur["catalog"] = catalog().get(cur["key"], {})
     return cur
 
 
@@ -376,14 +365,16 @@ def _retire(cfg: dict, cur: dict) -> None:
 
 def _recent_set_times(cfg: dict) -> list:
     out = []
-    if cfg.get("current"):
-        out.append(M.parse_ts(cfg["current"]["since"]))
-    for h in cfg.get("history", []):
-        if h.get("since"):
-            out.append(M.parse_ts(h["since"]))
+    for h in [cfg.get("current"), *cfg.get("history", [])]:
+        if isinstance(h, dict) and h.get("since"):
+            try:
+                out.append(_timestamp(h["since"]))
+            except (TypeError, ValueError):
+                continue
     return out
 
 
+@_serialized
 def can_set() -> tuple[bool, str]:
     """能不能再挑一个。返回 (行不行, 为什么不行)。"""
     cfg = load()
@@ -412,6 +403,7 @@ def can_set() -> tuple[bool, str]:
     return True, ""
 
 
+@_serialized
 def set_mood(key: str, hours: float | None = None, why: str = "",
              force: bool = False) -> dict:
     """
@@ -420,9 +412,9 @@ def set_mood(key: str, hours: float | None = None, why: str = "",
     force=True 跳过冷却和每日上限 —— 这是主人明确开口要换的时候用的。
     他有权，冷却拦的是"她自己频频换"，不是拦他。
     """
-    if key not in CATALOG:
+    if key not in catalog():
         raise ValueError(
-            f"没有「{key}」这个状态。可选：{'、'.join(CATALOG)}")
+            f"没有「{key}」这个状态。可选：{'、'.join(catalog())}")
 
     if not force:
         ok, msg = can_set()
@@ -440,16 +432,19 @@ def set_mood(key: str, hours: float | None = None, why: str = "",
         #
         # ★ 先夹范围再取随机，不要"先随机再夹"。走神基准 1h、下限也是 1h，
         #   先随机的话 0.7~1.3 会被下限削成清一色的 1.0 —— 浮动就白加了。
-        base = CATALOG[key].get("hours", 2)
+        base = catalog()[key].get("hours", 2)
         lo = max(r["min_hours"], base * (1 - JITTER))
         hi = min(r["max_hours"], base * (1 + JITTER))
         h = random.uniform(lo, hi) if hi > lo else base
+    if not math.isfinite(h):
+        raise ValueError("时长必须是有限数值")
     h = round(max(r["min_hours"], min(r["max_hours"], h)), 2)
 
     now = M.now()
     cfg = load()
     cfg["current"] = {
         "key": key,
+        "profile": PR.mood_profile(M.ROOT),
         "since": now.isoformat(timespec="seconds"),
         "until": (now + timedelta(hours=h)).isoformat(timespec="seconds"),
         "hours": h,
@@ -460,9 +455,10 @@ def set_mood(key: str, hours: float | None = None, why: str = "",
     return cfg["current"]
 
 
+@_serialized
 def clear(why: str = "manual") -> bool:
     cfg = load()
-    if not cfg.get("current"):
+    if not isinstance(cfg.get("current"), dict):
         return False
     cur = cfg["current"]
     cur = dict(cur)
@@ -485,11 +481,14 @@ def write_log(said: str = "", source: str = "qq") -> dict:
         "key": cur["key"] if cur else None,
         "why": (cur.get("why") or "") if cur else "",
         "source": source,
+        "persona_id": PR.active_id(M.ROOT),
+        "profile": PR.mood_profile(M.ROOT),
         "said": (said or "").strip().replace("\n", " ")[:80],
     }
     try:
-        MOOD_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with open(MOOD_LOG, "a", encoding="utf-8") as f:
+        log_path = M.ROOT / "data/mood_log.jsonl"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
     except OSError:
         pass        # 日志写不进去不该影响回话
@@ -501,56 +500,21 @@ def write_log(said: str = "", source: str = "qq") -> dict:
 # ═══════════════════════════════════════════════════════════════
 
 def block() -> str:
-    """
-    当前状态要注入的那段。没有状态就返回空串。
-
-    注意这里用的是 peek —— 注入 prompt 是只读路径，
-    不该因为它而被写一次文件。
-    """
     cur = active(peek=True)
     if not cur:
         return ""
-
     c = cur["catalog"]
-    since = M.parse_ts(cur["since"])
-
-    # ★ 硬约束必须放在**最前面**。
-    #   踩过的坑：原来这两条写在末尾，前面一大段"你会飘""你会话变少"
-    #   的描述性文字把它的分量压过去了，实测她真的会在回答里写
-    #   "（那件事我还飘着，先答你。）"—— 那就是在汇报状态。
-    #   约束的位置比约束的措辞重要。
-    lines = [
-        f"## 你现在停在「{cur['key']}」",
-        "",
-        "★★ 先说三条死规矩：",
-        "1. **别提起这段文字。**别说'我现在处于某某状态'，"
-        "也别写'（我还飘着）''（让我先收一收）'这类括号说明。"
-        "状态是从语气里露出来的，不是从嘴里说出来的。",
-        "2. **他是来找你办事的时候，先把外套脱了。**正事答完再回去。",
-        "3. **该冷该硬该较真的时候照样翻得回去。**这是外套不是内核，"
-        "它只改你默认怎么开口，不改你看事情的能力。",
-        "",
-        f"（{since:%m月%d日 %H:%M} 起，约 {cur['left_min']} 分钟后散）",
-        "",
-        c.get("feel", ""),
-        "",
-        c.get("voice", ""),
-    ]
-
+    lines = [f"## 此刻的心情：{cur['key']}",
+             "这是当前人格的一时心情，只影响语气；正事照常处理，不用播报状态。",
+             c.get("feel", ""), c.get("voice", "")]
     if c.get("sample"):
-        lines += ["", "这时候你会说："]
-        lines += [f"> {s}" for s in c["sample"]]
-
+        lines.append("语气参考：" + " / ".join(c["sample"]))
     if c.get("avoid"):
-        lines += ["", f"★ {c['avoid']}"]
-
+        lines.append(c["avoid"])
     if cur.get("why"):
-        lines += ["", f"（你自己记的由头：{cur['why']}）"]
-
+        lines.append("缘由：" + cur["why"])
     if cur["fading"]:
-        lines += ["", "**快散了。**会自己慢慢淡回平常的样子，"
-                      "不用交代，也别硬撑着演。"]
-
+        lines.append("快散了，慢慢回到平常。")
     return "\n".join(lines)
 
 
@@ -600,7 +564,7 @@ def selftest() -> int:
         e = set_mood("软毛", 2, "自检")
         check("能设状态", active() is not None and active()["key"] == "软毛")
         check("注入块非空", "软毛" in block())
-        check("注入块说明是外套", "外套" in block())
+        check("注入块只影响语气", "只影响语气" in block())
         check("冷却拦得住连设", not can_set()[0])
         try:
             set_mood("低电量", 2)
@@ -650,11 +614,11 @@ def main() -> None:
     if not args:
         print(status())
     elif args[0] == "list":
-        for k, v in CATALOG.items():
+        for k, v in catalog().items():
             print(f"  {k:<4} {v['hours']}h  {v.get('feel','')}")
     elif args[0] == "set":
         if len(args) < 2:
-            print(f"用法：mood.py set <{'/'.join(CATALOG)}> [小时] [由头]")
+            print(f"用法：mood.py set <{'/'.join(catalog())}> [小时] [由头]")
             return
         try:
             e = set_mood(args[1],

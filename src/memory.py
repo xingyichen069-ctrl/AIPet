@@ -569,10 +569,12 @@ def persona_text(include: tuple[str, ...] = ("SOUL.md", "BOUNDARIES.md")) -> str
     注意 HTML 注释里不能再出现注释结束标记，否则会提前闭合 ——
     SOUL.md 的说明里已经写了这条。
     """
+    import persona_runtime as PR
+    selected = PR.files(ROOT)
     parts = []
     for f in include:
-        p = ROOT / "persona" / f
-        if not p.exists():
+        p = selected.get(f)
+        if p is None or not p.exists():
             continue
         t = p.read_text(encoding="utf-8")
         t = re.sub(r"<!--.*?-->", "", t, flags=re.S)

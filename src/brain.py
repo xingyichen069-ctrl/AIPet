@@ -230,7 +230,7 @@ def build_system(query: str, level: str | None = None) -> tuple[str, dict]:
     """
     组装 system prompt，返回 (文本, 解析后的档位信息)。
 
-    system = 人格设定 + 思考强度指令 + 记忆（关系状态/相关回忆/用户档案）
+    system = 思考强度指令 + 记忆与任务上下文 + 人格设定
     """
     options = C.snapshot_options(query, level)
     return C.desktop_system(query, options), options
@@ -248,13 +248,16 @@ def build_payload(query: str, history: list[dict] | None = None,
     effort = EFFORT_MAP.get(p.get("reasoning_effort", "low"), "high")
 
     # 工具按档位裁剪：
-    #   get_time / get_system / recall / remember 永远可用（都是本地调用，零成本）
+    #   params.tools 可进一步限制本轮可见和可执行的工具
     #   web_search 只在档位的 search != off 时给（省电档不给，省时间）
     tools = []
     if HAS_TOOLS:
         tools = [t for t in TOOLSPECS
                  if t["function"]["name"] != "web_search"
                  or p.get("search", "on_demand") != "off"]
+
+    if isinstance(p.get("tools"), list):
+        tools = [t for t in tools if t["function"]["name"] in p["tools"]]
 
     selected_model = p.get("model", "")
     configured_model = provider_model()
@@ -284,6 +287,9 @@ def build_payload(query: str, history: list[dict] | None = None,
         # 关闭思考模式 —— 这时 temperature 才真正生效
         payload["thinking"] = {"type": "disabled"}
         payload["temperature"] = p.get("temperature", 0.75)
+        for param in ("frequency_penalty", "presence_penalty"):
+            if param in p:
+                payload[param] = p[param]
     else:
         # 思考模式：temperature 会被静默忽略，不传更诚实
         payload["reasoning_effort"] = effort
@@ -340,7 +346,16 @@ def _explain(e: Exception) -> str:
     return f"{type(e).__name__}: {e}"
 
 
-def stream(query: str, history: list[dict] | None = None,
+def stream(query, history=None, level=None, cancelled=None, system=None,
+           max_tokens=None, block_tools=None, allowed_tools=None, options=None,
+           deadline=None):
+    import persona_runtime as PR
+    with PR.bind(M.ROOT, (options or {}).get("persona_id")):
+        yield from _stream(query, history, level, cancelled, system, max_tokens,
+                           block_tools, allowed_tools, options, deadline)
+
+
+def _stream(query: str, history: list[dict] | None = None,
            level: str | None = None, cancelled=None,
            system: str | None = None, max_tokens: int | None = None,
            block_tools: set[str] | None = None,
@@ -369,6 +384,8 @@ def stream(query: str, history: list[dict] | None = None,
         query, history, level, stream=True, system=system,
         max_tokens=max_tokens, options=options, policy=policy)
 
+    if LT:
+        policy = LT.make_policy(allowed_tools={t["function"]["name"] for t in payload.get("tools", [])})
     yield ("level", r)
 
     messages = list(payload["messages"])

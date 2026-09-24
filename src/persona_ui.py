@@ -6,7 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QDialog, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QListWidget,
+    QComboBox, QTabWidget, QDialog, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QListWidget,
     QMessageBox, QPushButton, QPlainTextEdit, QVBoxLayout,
 )
 
@@ -39,7 +39,16 @@ class PersonaDialog(QDialog):
         right.addWidget(self.avatar, 0, Qt.AlignLeft)
         self.editor = QPlainTextEdit()
         self.editor.setPlaceholderText("在这里编辑 SOUL.md…")
-        right.addWidget(self.editor, 1)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self.editor, "人格")
+        self.mood_editor = QPlainTextEdit()
+        self.mood_editor.setPlaceholderText('情绪方案 JSON；每个状态包含 voice 和 hours。')
+        self.tabs.addTab(self.mood_editor, "情绪文案")
+        right.addWidget(self.tabs, 1)
+        right.addWidget(QLabel("使用的情绪方案（每个人格单独保存心情）"))
+        self.mood_combo = QComboBox()
+        self.mood_combo.currentTextChanged.connect(self._mood_selected)
+        right.addWidget(self.mood_combo)
         buttons = QHBoxLayout()
         for label, callback in (("导入 SOUL", self._import_soul), ("导入头像", self._import_avatar),
                                 ("保存", self._save), ("设为当前", self._activate)):
@@ -70,6 +79,12 @@ class PersonaDialog(QDialog):
             return
         self.current_id = self.items[row]["id"]
         self.editor.setPlainText(self.manager.read_soul(self.current_id))
+        self.mood_combo.blockSignals(True)
+        self.mood_combo.clear()
+        self.mood_combo.addItems(self.manager.mood_profiles())
+        self.mood_combo.setCurrentText(self.manager.mood_binding(self.current_id))
+        self.mood_combo.blockSignals(False)
+        self._mood_selected(self.mood_combo.currentText())
         avatar = self.items[row].get("avatar")
         if avatar and Path(avatar).exists():
             pm = QPixmap(avatar).scaled(self.avatar.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -78,6 +93,10 @@ class PersonaDialog(QDialog):
         else:
             self.avatar.clear()
             self.avatar.setText("暂无头像")
+
+    def _mood_selected(self, profile):
+        self.mood_editor.setPlainText(self.manager.read_moods(profile))
+        self.mood_editor.setReadOnly(profile != self.current_id)
 
     def _new(self):
         name, ok = QInputDialog.getText(self, "新建人格", "名称：")
@@ -93,6 +112,10 @@ class PersonaDialog(QDialog):
         if not self.current_id:
             return
         try:
+            profile = self.mood_combo.currentText()
+            if profile == self.current_id and self.mood_editor.toPlainText().strip() != "{}":
+                self.manager.save_moods(self.current_id, self.mood_editor.toPlainText())
+            self.manager.set_mood_profile(self.current_id, profile)
             self.manager.save_soul(self.current_id, self.editor.toPlainText())
             self._reload(self.current_id)
         except (ValueError, OSError) as e:

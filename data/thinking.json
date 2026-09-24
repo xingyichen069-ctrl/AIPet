@@ -102,15 +102,26 @@
       "when": "绝大多数日常对话。不知道选哪个就用这个",
       "params": {
         "model": "deepseek::deepseek-flash",
-        "reasoning_effort": "low",
+        "reasoning_effort": "none",
         "max_tokens": 8000,
-        "temperature": 0.75,
+        "temperature": 1.25,
         "memory_budget": 12000,
         "memory_entries": 12,
         "memory_floor": 4,
         "search": "on_demand",
         "self_check": false,
-        "verbosity": "1-3 句，保持它一贯的简短"
+        "verbosity": "按当前人格自然接话，说到够用就停。",
+        "frequency_penalty": 0.4,
+        "tools": [
+          "get_time",
+          "recall",
+          "remember",
+          "mood",
+          "web_search",
+          "code_task",
+          "agreement",
+          "quiet_company"
+        ]
       }
     },
     "serious": {
@@ -130,7 +141,7 @@
         "memory_floor": 5,
         "search": "on_demand",
         "self_check": false,
-        "verbosity": "3-6 句，可以分点，但仍然不用客服腔"
+        "verbosity": "需要的解释说清楚，语气沿用当前人格。"
       }
     },
     "deep": {

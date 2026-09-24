@@ -811,7 +811,7 @@ SPECS = [
                                               "（由头写在 why 里，见 SOUL.md 那条规矩）"},
                     "key": {"type": "string",
                             "description":
-                                "状态名：起雾 / 软毛 / 低电量 / 手痒 / 较真 / 偏心 / 走神"},
+                                "当前人格的状态名；先用 action=list 查询可用项"},
                     "hours": {"type": "number",
                               "description": "停多久，默认按该状态的常规时长（1-8 小时）"},
                     "why": {"type": "string",

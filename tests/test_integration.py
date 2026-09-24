@@ -41,7 +41,8 @@ class Integration(unittest.TestCase):
     def test_model_tool_round_creates_real_agreement_then_answers(self):
         call = {'reasoning_content': 'tool decision', 'tool_calls': [{'index': 0, 'id': 't1',
                 'function': {'name': 'agreement', 'arguments': json.dumps({'action':'create','title':'收衣服','minutes':40})}}]}
-        payload = {'messages': [{'role':'user','content':'40分钟后提醒我收衣服'}], 'max_tokens': 100}
+        payload = {'messages': [{'role':'user','content':'40分钟后提醒我收衣服'}], 'max_tokens': 100,
+                   'tools': [t for t in LT.SPECS if t['function']['name'] == 'agreement']}
         with patch.object(B, 'api_key', return_value='test-key'), \
              patch.object(B, 'build_payload', return_value=(payload, {})), \
              patch.object(B, '_request', side_effect=[Response(call), Response({'content':'已记下。'})]) as request, \
@@ -53,6 +54,18 @@ class Integration(unittest.TestCase):
         self.assertEqual(messages[-2]['reasoning_content'], 'tool decision')
         self.assertEqual(messages[-1]['role'], 'tool')
         self.assertIn('已保存', messages[-1]['content'])
+
+    def test_unexposed_tool_cannot_execute(self):
+        called = []
+        call = {'tool_calls': [{'index':0, 'id':'t1', 'function':
+                {'name':'fake_hidden', 'arguments':'{}'}}]}
+        payload = {'messages':[{'role':'user','content':'test'}], 'max_tokens':100}
+        with patch.object(B,'api_key',return_value='test-key'), \
+             patch.object(B,'build_payload',return_value=(payload,{})), \
+             patch.object(B,'_request',side_effect=[Response(call),Response({'content':'结束'})]), \
+             patch.dict(LT.DISPATCH,{'fake_hidden':lambda args:called.append(args) or 'bad'}):
+            list(B.stream('test'))
+        self.assertEqual(called,[])
 
     def test_cancellation_prevents_request_and_tool_execution(self):
         payload = {'messages': [], 'max_tokens': 100}

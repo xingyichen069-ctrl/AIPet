@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 import memory as M
 import thinking as T
+import persona_runtime as PR
 
 
 @dataclass(frozen=True)
@@ -23,9 +24,11 @@ class PreparedRequest:
     system: str
     options: dict
     max_tokens: int | None = None
+    examples: tuple[dict, ...] = ()
 
     def messages(self) -> list[dict]:
         messages = [{"role": "system", "content": self.system}]
+        messages.extend(self.examples)
         messages.extend(self.history)
         messages.append({"role": "user", "content": self.query})
         return messages
@@ -52,7 +55,8 @@ def desktop_system(query: str, options: dict) -> str:
         if agreements:
             body += "\n\n## 已保存的约定与陪伴\n" + "\n".join(
                 task_description(t) for t in agreements[:20])
-    return f"{M.persona_text()}\n\n---\n\n{body}"
+    body += "\n\n开头的示例对话只示范语气，不是本次会话经历。"
+    return f"{body}\n\n---\n\n{M.persona_text()}"
 
 
 def prepare(query: str, history: list[dict] | None = None,
@@ -61,11 +65,14 @@ def prepare(query: str, history: list[dict] | None = None,
             options: dict | None = None) -> PreparedRequest:
     """Prepare a turn exactly once, preserving a custom system when supplied."""
     snapshot = snapshot_options(query, level, options)
+    limit = 80 if snapshot.get("level") == "thunder" else 24
     frozen_history = tuple(
         {"role": item["role"], "content": item["content"]}
-        for item in (history or [])[-16:]
+        for item in (history or [])[-limit:]
     )
+    use_examples = system is None or snapshot.get("persona_examples", False)
     if system is None:
         system = desktop_system(query, snapshot)
     return PreparedRequest(query=query, history=frozen_history, system=system,
-                           options=snapshot, max_tokens=max_tokens)
+                           options=snapshot, max_tokens=max_tokens,
+                           examples=tuple(PR.examples(M.ROOT)) if use_examples else ())
