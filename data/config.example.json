@@ -3,11 +3,11 @@
   "retrieval": {
     "_说明": "检索参数 —— 每次对话时，从记忆库里挑多少内容注入 prompt",
     "token_budget": 1200,
-    "_token_budget": "记忆检索配置预算。当前部分兜底条目可能超出预算，尚不能作为严格上限。",
+    "_token_budget": "按最终回忆块估算，含日期、来源、说话人与截取标记；不是整次请求或服务商精确token上限。桌面对话由本轮档位参数覆盖。",
     "max_entries": 12,
     "_max_entries": "最多注入几条记忆",
     "recency_floor": 4,
-    "_recency_floor": "无论分数高低，最近 N 条一定注入（保证短期连贯性）",
+    "_recency_floor": "在剩余预算与条数内补入最近N条，不能保证全部注入。",
     "min_score": 0.05,
     "_min_score": "低于这个分数直接丢弃，避免注入噪音"
   },
@@ -95,15 +95,17 @@
     }
   },
   "knowledge": {
-    "_说明": "独立命令行知识库索引，尚未接入普通对话。",
+    "_说明": "可选本地资料库，默认关闭。TXT/Markdown手动build后可参与默认桌面/普通brain命令行对话；命中片段会发给配置的大脑API。",
     "enabled": false,
-    "_enabled": "用于独立知识库功能；打开不会让桌面对话自动读取索引。",
+    "_enabled": "开启并重启后读取有效索引；资料新增、修改、删除或旧版索引都需手动build。",
     "docs_dir": "knowledge",
     "_docs_dir": "放资料的文件夹（相对 AIPet 根目录）",
     "chunk_size": 600,
     "_chunk_size": "每块目标字符数",
     "max_chunks": 6,
-    "_max_chunks": "每次检索最多返回几块"
+    "_max_chunks": "每次检索最多返回几块",
+    "token_budget": 2000,
+    "_token_budget": "资料参考块的独立估算预算，包含来源和说明；与记忆预算分开，不是整次请求上限。"
   },
   "live2d": {
     "_说明": "Live2D 模型配置。enabled=false 就退回静态图片模式。",

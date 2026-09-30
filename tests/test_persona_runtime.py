@@ -216,7 +216,7 @@ class PersonaRuntime(unittest.TestCase):
         finally:
             dialog.close()
 
-    def test_migration_preserves_custom_fields_and_backs_up(self):
+    def test_migration_keeps_all_private_parameters_and_disables_apply(self):
         sys.path.insert(0,str(PROJECT / 'tools'))
         import migrate_persona_runtime as migration
         cfg=json.loads((self.root / 'data/thinking.json').read_text())
@@ -228,13 +228,11 @@ class PersonaRuntime(unittest.TestCase):
         original=target.read_bytes()
         changes=migration.plan(self.root)
         self.assertEqual(target.read_bytes(),original)
-        backup=migration.apply(self.root,changes)
-        actual=json.loads(target.read_text())
-        self.assertEqual(actual['current'],'serious')
-        self.assertEqual(actual['presets']['daily']['params']['model'],'custom-model')
-        self.assertEqual(actual['presets']['serious']['params']['reasoning_effort'],'medium')
-        self.assertEqual((backup / 'data/thinking.json').read_bytes(),original)
-        self.assertEqual(migration.plan(self.root),{})
+        self.assertNotIn(target,changes)
+        with self.assertRaisesRegex(ValueError,'已停用'):
+            migration.apply(self.root,changes)
+        self.assertEqual(target.read_bytes(),original)
+        self.assertFalse((self.root/'backups').exists())
 
     def test_migration_splits_only_recognized_example_format(self):
         sys.path.insert(0,str(PROJECT / 'tools'))
@@ -242,9 +240,34 @@ class PersonaRuntime(unittest.TestCase):
         text='# 我自己的灵梦\n\n## 话到这里就够了\n旧规则\n\n## 几段声音\n原创试声\n\n对方：你好\n你：嗯？\n'
         soul,exchanges=migration.split_reimu(text)
         self.assertIn('我自己的灵梦',soul)
-        self.assertNotIn('旧规则',soul)
+        self.assertIn('旧规则',soul)
+        self.assertIn('原创试声',soul)
+        self.assertIn('## 几段声音',soul)
         self.assertNotIn('对方：',soul)
         self.assertEqual(exchanges[0][-1]['content'],'嗯？')
+
+    def test_import_dialog_keeps_current_persona_and_distinguishes_copies(self):
+        from PySide6.QtWidgets import QApplication
+        import persona_ui as UI
+        app = QApplication.instance() or QApplication([])
+        source = self.root/'SOUL.md'
+        source.write_bytes('# 同名角色\r\n\r\n保留正文\r\n'.encode('utf-8'))
+        first = self.manager.import_soul(source)
+        self.manager.set_active(first['id'])
+        with patch.object(UI,'PersonaManager',return_value=self.manager):
+            dialog = UI.PersonaDialog()
+        try:
+            with patch.object(UI.QFileDialog,'getOpenFileName',return_value=(str(source),'')), \
+                 patch.object(UI.QMessageBox,'information') as notice:
+                dialog._import_soul()
+            self.assertEqual(self.manager.active_id(),first['id'])
+            self.assertNotEqual(dialog.current_id,first['id'])
+            self.assertEqual(Path(first['soul']).read_bytes(),source.read_bytes())
+            labels = [dialog.list.item(i).text() for i in range(dialog.list.count())]
+            self.assertTrue(any('同名 2' in label for label in labels))
+            notice.assert_called_once()
+        finally:
+            dialog.close()
 
     def test_rewrite_probe_uses_only_public_persona_without_tools(self):
         sys.path.insert(0,str(PROJECT / 'tools'))

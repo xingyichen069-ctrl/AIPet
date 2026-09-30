@@ -347,43 +347,61 @@ class Desktop(unittest.TestCase):
             self.store.add_message('user' if i % 2 else 'assistant',
                                    f'第 {i} 条历史消息。' * 12)
         self.chat.restore()
-        QTest.qWait(100)
+        return self.wait_for_scroll()
+
+    def wait_for_scroll(self, *, bottom=True, previous_maximum=None):
+        """Wait for this layout and its queued follow, not a fixed elapsed time."""
         bar = self.chat.scroll.verticalScrollBar()
-        self.assertGreater(bar.maximum(), 0)
-        return bar
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            APP.processEvents()
+            grown = bar.maximum() > 0 and (
+                previous_maximum is None or bar.maximum() > previous_maximum)
+            if grown and not self.chat._scroll_timer.isActive():
+                if bar.value() == (bar.maximum() if bottom else 0):
+                    return bar
+            QTest.qWait(5)
+        self.fail(f'Scroll did not settle: value={bar.value()}, maximum={bar.maximum()}, '
+                  f'previous={previous_maximum}, following={self.chat.follow_bottom}, '
+                  f'pending={self.chat._scroll_timer.isActive()}')
 
     def test_send_from_history_jumps_to_latest_before_reply(self):
         bar = self.fill_chat_history()
         bar.setValue(0)
         FakeWorker.mode = 'wait'
+        previous = bar.maximum()
         self.chat.input.setPlainText('继续聊这个方案')
         self.chat.send()
-        QTest.qWait(100)
+        self.wait_for_scroll(previous_maximum=previous)
         self.assertEqual(bar.value(), bar.maximum())
 
     def test_stream_follows_layout_growth_but_allows_reading_history(self):
         bar = self.fill_chat_history()
         self.assertEqual(bar.value(), bar.maximum())
         for _ in range(3):
+            previous = bar.maximum()
             self.chat.on_chunk('content', '新的一行回复内容。\n' * 12)
-            QTest.qWait(50)
+            self.wait_for_scroll(previous_maximum=previous)
             self.assertEqual(bar.value(), bar.maximum())
         bar.setValue(0)
         # A queued follow must not override a subsequent manual scroll.
+        previous = bar.maximum()
         self.chat.on_chunk('content', '继续生成的回复。\n' * 12)
-        QTest.qWait(50)
+        self.wait_for_scroll(bottom=False, previous_maximum=previous)
         self.assertEqual(bar.value(), 0)
         bar.setValue(bar.maximum())
+        previous = bar.maximum()
         self.chat.on_chunk('content', '回到底部后继续跟随。\n' * 12)
-        QTest.qWait(50)
+        self.wait_for_scroll(previous_maximum=previous)
         self.assertEqual(bar.value(), bar.maximum())
 
     def test_local_command_from_history_jumps_to_latest(self):
         bar = self.fill_chat_history()
         bar.setValue(0)
+        previous = bar.maximum()
         self.chat.input.setPlainText('陪我写半小时')
         self.chat.send()
-        QTest.qWait(100)
+        self.wait_for_scroll(previous_maximum=previous)
         self.assertEqual(bar.value(), bar.maximum())
 
     def test_stop_does_not_store_success(self):

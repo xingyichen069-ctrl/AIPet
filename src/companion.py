@@ -19,8 +19,11 @@ MAX_ATTACHMENT_CHARS = 24000
 IMAGE_SUFFIX = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'}
 
 
-def read_attachment(path):
+def read_attachment(path, *, cancelled=None):
     p = Path(path)
+    stopped = cancelled or (lambda: False)
+    if stopped():
+        raise InterruptedError('已取消读取。')
 
     # ★ 图片走读图那条路：先用 vision 转成文字，之后当普通材料处理。
     #   这样附件机制、附件条、随消息发送这些全都不用改 —— 图片对下游
@@ -29,29 +32,35 @@ def read_attachment(path):
         if not p.is_file():
             raise ValueError('文件不存在。')
         import vision as V
-        text = V.read(p, '把这张图里的内容读出来。有文字就逐字抄下来、保留分行；'
-                        '没有文字就平实描述画面里有什么。不要评价，不要推测用途。')
-        if not text.strip():
-            raise ValueError('这张图没读出内容。')
-        return {'name': p.name, 'text': text, 'image': True}
+        result = V.read_result(p, '把这张图里的内容读出来。有文字就逐字抄下来、保留分行；'
+                                  '没有文字就平实描述画面里有什么。不要评价，不要推测用途。',
+                               cancelled=stopped)
+        if result.get('cancelled') or stopped():
+            raise InterruptedError('已取消读取。')
+        if not result['ok']:
+            raise ValueError(result['error'])
+        if len(result['text']) > MAX_ATTACHMENT_CHARS:
+            raise ValueError('图片识别内容超过24,000字，请拆分图片后重试。')
+        return {'name': p.name, 'text': result['text'], 'image': True}
 
     # ★ docx 也走「先转成文字」这条路：正文和里面的图都由 docx_read 处理，
     #   出来就是一段文本，下游（附件条、随消息发送）不用为它改任何东西。
-    #   上限不按文件大小卡 —— 压缩包可能只有几十 KB，解出来却能很长，
-    #   docx_read 自己按 MAX_CHARS 截。
+    #   docx_read 在解压前检查体积；任一图片失败或输出超限时整份失败。
     #   .doc（老的二进制格式）也走这条路 —— 它解不出内容，但 docx_read
     #   会回一句「另存为 .docx」，比一句泛泛的「格式不支持」有用得多。
     if p.suffix.lower() in ('.docx', '.doc'):
         if not p.is_file():
             raise ValueError('文件不存在。')
         import docx_read
-        r = docx_read.read(p)
+        r = docx_read.read(p, cancelled=stopped, max_chars=MAX_ATTACHMENT_CHARS)
+        if r.get('cancelled') or stopped():
+            raise InterruptedError('已取消读取。')
         if not r['ok']:
             raise ValueError(r['error'] or '这份 docx 读不了。')
-        text = docx_read.as_prompt_block(p)
+        text = docx_read.format_result(r, p.name)
         if not text.strip():
             raise ValueError('这份 docx 里没读出内容。')
-        return {'name': p.name, 'text': text[:MAX_ATTACHMENT_CHARS], 'image': False}
+        return {'name': p.name, 'text': text, 'image': False}
 
     if p.suffix.lower() not in {'.txt', '.text', '.md', '.markdown'}:
         raise ValueError('支持 TXT / Markdown / DOCX，以及 PNG / JPG / WEBP / GIF / BMP 图片。')

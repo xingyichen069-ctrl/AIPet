@@ -183,14 +183,11 @@ def recall(query: str, limit: int = 8) -> str:
     """检索记忆库。想知道"用户以前说过什么"时用。"""
     try:
         import thinking as T
-        T.apply_to_memory(query)
-        hits = M.retrieve(query, top_k=int(limit))
-        if not hits:
-            return "（没找到相关记忆）"
-        return "\n".join(
-            f"- [{M.parse_ts(e['ts']):%m月%d日}] {e['text']} "
-            f"{'★' * e.get('importance', 3)}"
-            for e in hits)
+        retrieval = tool_context().get("retrieval")
+        if retrieval is None:
+            retrieval = T.apply_to_memory(query=query)["retrieval"]
+        hits = M.retrieve(query, top_k=limit, retrieval=retrieval)
+        return M.format_memories(hits, budget_tokens=retrieval["token_budget"])
     except Exception as e:
         return f"检索失败：{e}"
 

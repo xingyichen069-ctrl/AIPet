@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import re
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -50,10 +51,15 @@ if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("
 # 文字：一篇报告几万字很正常，但整篇塞进 prompt 会把它撑爆。
 MAX_CHARS = 120_000
 
-# 图片：每张都要真调一次视觉接口，又慢又要钱。超了就只列名字不读。
+# 图片：每张不同图片只调用一次视觉接口。超过上限时整份拒绝，不静默漏图。
 # 这个数字是"一份文档里真正需要读的图"的合理上限 —— 一整本扫描件
 # 不该走这条路，那种该先转成文本。
 MAX_IMAGES = 12
+MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
+MAX_EXPANDED_BYTES = 64 * 1024 * 1024
+MAX_XML_BYTES = 4 * 1024 * 1024
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_MEMBERS = 4096
 
 # 办公文档的 XML 命名空间
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -81,85 +87,78 @@ def _local(tag: str) -> str:
 #  文字
 # ═══════════════════════════════════════════════════════════════
 
-def _para_text(p) -> tuple[str, list[str]]:
-    """
-    一个段落 → (文字, 里面引用的图片 rId 列表)。
-
-    按文档顺序走一遍：`w:t` 是文字，`w:tab`/`w:br` 是控制符，
-    `a:blip` 和 `v:imagedata` 是图片引用。
-
-    ★ 图片用 rId 记下来，等会儿再解析成实际文件 —— 这一步只认 XML，
-      不碰 zip，两者分开才好测。
-    """
-    out: list[str] = []
-    rids: list[str] = []
-    for node in p.iter():
-        name = _local(node.tag)
-        if name == "t":
-            out.append(node.text or "")
-        elif name == "tab":
-            out.append("\t")
-        elif name in ("br", "cr"):
-            out.append("\n")
-        elif name == "blip":
-            rid = node.get(f"{R}embed") or node.get(f"{R}link")
-            if rid:
-                rids.append(rid)
-        elif name == "imagedata":
-            rid = node.get(f"{R}id")
-            if rid:
-                rids.append(rid)
-    return "".join(out), rids
+def _text(blocks: list[dict], text: str) -> None:
+    if text:
+        if blocks and blocks[-1]["kind"] == "text":
+            blocks[-1]["text"] += text
+        else:
+            blocks.append({"kind": "text", "text": text})
 
 
-def _cell_text(tc) -> str:
-    """表格单元格：里面所有段落合成一行。"""
-    parts = []
-    for p in tc.iter(f"{W}p"):
-        t, _ = _para_text(p)
-        if t.strip():
-            parts.append(t.strip())
-    return " ".join(parts)
+def _inline(node, blocks: list[dict]) -> None:
+    name = _local(node.tag)
+    if name == "t":
+        _text(blocks, node.text or "")
+    elif name == "tab":
+        _text(blocks, "\t")
+    elif name in ("br", "cr"):
+        _text(blocks, "\n")
+    elif name in ("blip", "imagedata"):
+        rid = node.get(f"{R}embed") or node.get(f"{R}link") or node.get(f"{R}id")
+        if rid:
+            blocks.append({"kind": "image", "rid": rid})
+    elif name == "AlternateContent":
+        # Word stores a second representation as a fallback, not a second image.
+        choice = next((c for c in node if _local(c.tag) == "Choice"), None)
+        if choice is None:
+            choice = next((c for c in node if _local(c.tag) == "Fallback"), None)
+        if choice is not None:
+            _inline(choice, blocks)
+    else:
+        for child in node:
+            _inline(child, blocks)
 
 
-def _walk(node, lines: list[str], rids: list[str]) -> None:
-    """
-    按顺序遍历正文。
-
-    ★ 必须保持文档顺序 —— 图片读出来的文字要插在它原来出现的地方，
-      全堆到末尾的话，图说和上下文就对不上了。
-    """
+def _walk_blocks(node, blocks: list[dict]) -> None:
     for child in node:
         name = _local(child.tag)
         if name == "p":
-            text, sub_rids = _para_text(child)
-            if text.strip():
-                lines.append(text.rstrip())
-            rids.extend(sub_rids)
+            _inline(child, blocks)
+            _text(blocks, "\n")
         elif name == "tbl":
-            for tr in child.findall(f"{W}tr"):
-                cells = [_cell_text(tc) for tc in tr.findall(f"{W}tc")]
-                if any(c for c in cells):
-                    lines.append(" | ".join(cells))
-            lines.append("")
+            for row in child.findall(f"{W}tr"):
+                for index, cell in enumerate(row.findall(f"{W}tc")):
+                    if index:
+                        _text(blocks, " | ")
+                    cell_blocks = []
+                    _walk_blocks(cell, cell_blocks)
+                    if cell_blocks and cell_blocks[-1]["kind"] == "text":
+                        cell_blocks[-1]["text"] = cell_blocks[-1]["text"].rstrip("\n")
+                    for block in cell_blocks:
+                        if block["kind"] == "text":
+                            _text(blocks, block["text"])
+                        else:
+                            blocks.append(block)
+                _text(blocks, "\n")
+            _text(blocks, "\n")
         elif name in ("sdt", "sdtContent", "body", "txbxContent"):
-            _walk(child, lines, rids)     # 内容控件、文本框：往里挖
-        # 其余（sectPr 等）跳过
+            _walk_blocks(child, blocks)
+
+
+def extract_blocks(document_xml: bytes) -> list[dict]:
+    root = ET.fromstring(document_xml)
+    body = root.find(f"{W}body")
+    blocks: list[dict] = []
+    if body is not None:
+        _walk_blocks(body, blocks)
+    return blocks
 
 
 def extract_text(document_xml: bytes) -> tuple[str, list[str]]:
-    """document.xml → (正文文字, 图片 rId 顺序表)"""
-    root = ET.fromstring(document_xml)
-    body = root.find(f"{W}body")
-    if body is None:
-        return "", []
-    lines: list[str] = []
-    rids: list[str] = []
-    _walk(body, lines, rids)
-
-    text = "\n".join(lines)
-    text = re.sub(r"\n{3,}", "\n\n", text)         # 连续空行压成一个
-    return text.strip(), rids
+    """Compatibility extraction view; ordered blocks retain image positions."""
+    blocks = extract_blocks(document_xml)
+    text = "".join(b["text"] for b in blocks if b["kind"] == "text")
+    return re.sub(r"\n{3,}", "\n\n", text).strip(), [b["rid"] for b in blocks if b["kind"] == "image"]
 
 
 def _rels_map(zf: zipfile.ZipFile) -> dict[str, str]:
@@ -178,7 +177,7 @@ def _rels_map(zf: zipfile.ZipFile) -> dict[str, str]:
         return out
     for rel in root:
         rid, target = rel.get("Id"), rel.get("Target")
-        if not rid or not target:
+        if not rid or not target or rel.get("TargetMode", "").lower() == "external":
             continue
         if target.startswith("/"):
             out[rid] = target.lstrip("/")
@@ -213,170 +212,157 @@ def looks_like_docx(path: str | Path) -> bool:
         return False
 
 
-def read(path: str | Path, with_images: bool = True,
-         image_question: str = "") -> dict:
-    """
-    读一份 .docx。
+def _check_zip(zf: zipfile.ZipFile) -> None:
+    infos = zf.infolist()
+    if len(infos) > MAX_MEMBERS:
+        raise ValueError("文档内部文件过多，请拆分后再读。")
+    if sum(i.file_size for i in infos) > MAX_EXPANDED_BYTES:
+        raise ValueError("文档解压后超过64 MB，请缩小或拆分后再读。")
+    seen = set()
+    for info in infos:
+        name = info.filename.casefold()
+        if name in seen:
+            raise ValueError("文档包含重复的内部文件，无法可靠读取。")
+        seen.add(name)
+        if info.flag_bits & 1:
+            raise ValueError("暂不支持加密的Word文档，请另存为未加密副本。")
+        if name.endswith((".xml", ".rels")) and info.file_size > MAX_XML_BYTES:
+            raise ValueError("文档的XML结构超过4 MB，请拆分文档。")
 
-    **不抛异常** —— 调用方是模型，拿到异常多半会编一段看起来像正文的东西，
-    那比说"读不了"糟糕得多。失败一律返回 {"ok": False, "error": "..."}。
+
+def _compose(result: dict) -> str:
+    pictures = {im["name"]: (i, im) for i, im in enumerate(result["images"], 1)}
+    parts = []
+    for block in result["blocks"]:
+        if block["kind"] == "text":
+            parts.append(block["text"])
+        elif block.get("name") in pictures:
+            number, image = pictures[block["name"]]
+            parts.append(f"\n[图{number}｜{Path(image['name']).name}]\n{image['text']}\n")
+    return re.sub(r"\n{3,}", "\n\n", "".join(parts)).strip()
+
+
+def read(path: str | Path, with_images: bool = True,
+         image_question: str = "", *, cancelled=None,
+         max_chars: int = MAX_CHARS) -> dict:
+    """Read once, retaining order. Any required image failure fails the file.
+
+    `with_images=False` is an explicit text-only developer operation. Desktop
+    attachments always require every referenced image to be read successfully.
+    No member is extracted using its archive pathname.
     """
     p = Path(path)
-    out = {"ok": False, "text": "", "images": [], "error": "", "truncated": False}
+    stopped = cancelled or (lambda: False)
+    out = {"ok": False, "text": "", "images": [], "blocks": [], "error": "",
+           "truncated": False, "partial": False, "cancelled": False}
 
-    if not p.exists():
-        out["error"] = f"找不到这个文件：{p}"
-        return out
-    if p.is_dir():
-        out["error"] = f"{p} 是目录，不是文档"
+    def fail(reason, *, was_cancelled=False):
+        out.update(ok=False, error=reason, partial=bool(out["text"] or out["images"]),
+                   cancelled=was_cancelled)
         return out
 
+    if stopped():
+        return fail("已取消读取。", was_cancelled=True)
+    if not p.is_file():
+        return fail("文件不存在或不是普通文件。")
     try:
-        head = p.open("rb").read(8)
-    except OSError as e:
-        out["error"] = f"读不了：{e}"
-        return out
-
-    if head.startswith(OLE_MAGIC):
-        out["error"] = (f"{p.name} 是老的 .doc 格式（不是 .docx），"
-                        f"它是一整个二进制文件，解不出文字。"
-                        f"让对方用 Word 另存为 .docx 就行。")
-        return out
-    if not head.startswith(DOCX_MAGIC):
-        out["error"] = f"{p.name} 不是一个 docx（文件头对不上）。"
-        return out
-
-    try:
-        zf = zipfile.ZipFile(p)
-    except zipfile.BadZipFile as e:
-        out["error"] = f"{p.name} 打不开：{e}"
-        return out
-
-    with zf:
-        try:
-            doc = zf.read("word/document.xml")
-        except KeyError:
-            out["error"] = (f"{p.name} 里没有 word/document.xml —— "
-                            f"是个压缩包，但不是 Word 文档。")
-            return out
-
-        try:
-            text, rids = extract_text(doc)
-        except ET.ParseError as e:
-            out["error"] = f"{p.name} 的正文 XML 解析不了：{e}"
-            return out
-
-        if len(text) > MAX_CHARS:
-            text = text[:MAX_CHARS] + f"\n\n……（正文太长，截到 {MAX_CHARS} 字）"
-            out["truncated"] = True
-        out["text"] = text
-
-        if not with_images:
-            out["ok"] = True
-            return out
-
-        # ── 图片 ──────────────────────────────────────────────
-        # 去重：同一张图在文档里被引用两次只读一次（读一次要调一次接口）
-        rels = _rels_map(zf)
-        names: list[str] = []
-        for rid in rids:
-            name = rels.get(rid)
-            if name and name not in names:
-                names.append(name)
-
-        media = [n for n in zf.namelist()
-                 if n.startswith("word/media/")
-                 and Path(n).suffix.lower() in IMAGE_SUFFIX]
-
-        if not names:
-            # 没有引用关系（有些工具生成的文档丢了 rels），退而求其次：
-            # 媒体目录里有几张读几张，只是插不回原位了
-            names = media
-
-        if names:
-            try:
-                import vision as V
-            except Exception as e:                     # noqa: BLE001
-                out["error"] = f"（图片没读：vision 加载失败 {e}）"
+        if p.stat().st_size > MAX_ARCHIVE_BYTES:
+            return fail("文档超过32 MB，请先压缩图片或拆分文档。")
+        with p.open("rb") as handle:
+            head = handle.read(8)
+        if head.startswith(OLE_MAGIC):
+            return fail(f"{p.name} 是老的 .doc 格式，请用Word另存为 .docx。")
+        if not head.startswith(DOCX_MAGIC):
+            return fail(f"{p.name} 不是一个docx（文件头对不上）。")
+        with zipfile.ZipFile(p) as zf:
+            _check_zip(zf)
+            if "word/document.xml" not in zf.namelist():
+                return fail(f"{p.name} 没有 word/document.xml，不是 Word 文档。")
+            blocks = extract_blocks(zf.read("word/document.xml"))
+            out["blocks"] = blocks
+            out["text"] = "".join(b["text"] for b in blocks if b["kind"] == "text").strip()
+            if len(out["text"]) > max_chars:
+                out["truncated"] = True
+                return fail(f"正文超过 {max_chars:,} 字，无法完整作为材料，请拆分文档。")
+            if not with_images:
                 out["ok"] = True
                 return out
-
-            ok, why = V.available()
-            if not ok:
-                out["images"] = [{"name": n, "text": "", "note": why} for n in names]
-            else:
-                tmpdir = p.parent / "_docx_tmp"
-                try:
-                    tmpdir.mkdir(exist_ok=True)
-                    for i, name in enumerate(names[:MAX_IMAGES], 1):
-                        entry = {"name": name, "text": "", "note": ""}
-                        try:
-                            data = zf.read(name)
-                        except KeyError:
-                            entry["note"] = "压缩包里没有这个文件"
-                            out["images"].append(entry)
-                            continue
-                        # 落到临时文件再交给 vision —— 它要的是磁盘上的路径，
-                        # 而且会重新嗅一次文件头，这是它的安全闸门
-                        tmp = tmpdir / f"{i:02d}{Path(name).suffix.lower()}"
-                        try:
-                            tmp.write_bytes(data)
-                            entry["text"] = V.read(tmp, image_question or DEFAULT_IMAGE_QUESTION)
-                        except OSError as e:
-                            entry["note"] = f"写临时文件失败：{e}"
-                        finally:
-                            try:
-                                tmp.unlink()
-                            except OSError:
-                                pass
-                        out["images"].append(entry)
-                finally:
+            rels = _rels_map(zf)
+            names = []
+            for block in blocks:
+                if block["kind"] != "image":
+                    continue
+                name = rels.get(block["rid"])
+                if not name:
+                    return fail("文档包含缺失或外链图片，无法完整读取；请将图片嵌入文档后重试。")
+                block["name"] = name
+                if name not in names:
+                    names.append(name)
+            if not names:
+                # Some exporters omit relationships. Preserve an explicit
+                # positional limitation instead of inventing an image location.
+                names = [n for n in zf.namelist() if n.startswith("word/media/")
+                         and Path(n).suffix.lower() in IMAGE_SUFFIX]
+                if names:
+                    _text(blocks, "\n（以下图片未提供文内位置，按文件顺序列出。）\n")
+                    blocks.extend({"kind": "image", "name": name} for name in names)
+            if len(names) > MAX_IMAGES:
+                return fail(f"文档含 {len(names)} 张不同图片，超过一次 {MAX_IMAGES} 张上限，请拆分。")
+            if names:
+                import vision as V
+                ok, why = V.available()
+                if not ok:
+                    return fail(f"文档中的图片无法识别：{why}。整份材料未添加。")
+                # Preflight all members before sending any image to a provider.
+                for name in names:
                     try:
-                        tmpdir.rmdir()
-                    except OSError:
-                        pass
+                        info = zf.getinfo(name)
+                    except KeyError:
+                        return fail(f"文档引用的图片缺失：{Path(name).name}。整份材料未添加。")
+                    if info.file_size > MAX_IMAGE_BYTES or Path(name).suffix.lower() not in V.MIME:
+                        return fail(f"图片 {Path(name).name} 超过8 MB或格式不支持，请转为PNG/JPG等支持格式。")
+                cache = Path(__file__).resolve().parents[1] / "data/cache/docx"
+                cache.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryDirectory(prefix="read-", dir=cache) as temporary:
+                    for index, name in enumerate(names, 1):
+                        if stopped():
+                            return fail("已取消读取。", was_cancelled=True)
+                        image = Path(temporary) / f"{index:02d}{Path(name).suffix.lower()}"
+                        image.write_bytes(zf.read(name))
+                        result = V.read_result(image, image_question or DEFAULT_IMAGE_QUESTION,
+                                               cancelled=stopped)
+                        if stopped() or result.get("cancelled"):
+                            return fail("已取消读取。", was_cancelled=True)
+                        if not result["ok"]:
+                            return fail(f"图片 {index}（{Path(name).name}）读取失败：{result['error']} 整份材料未添加。")
+                        out["images"].append({"name": name, "text": result["text"], "note": ""})
+            rendered = _compose(out)
+            if len(rendered) > max_chars:
+                out["truncated"] = True
+                return fail(f"正文与识别结果超过 {max_chars:,} 字，无法完整作为材料，请拆分文档。")
+            if stopped():
+                return fail("已取消读取。", was_cancelled=True)
+            out["ok"] = True
+            return out
+    except ValueError as exc:
+        return fail(str(exc))
+    except (OSError, KeyError, zipfile.BadZipFile, ET.ParseError,
+            RuntimeError, NotImplementedError) as exc:
+        return fail(f"文档未读取完成：{type(exc).__name__}。请检查文件是否损坏、受限或正在被修改。")
 
-            skipped = len(names) - MAX_IMAGES
-            if skipped > 0:
-                out["images"].append({
-                    "name": f"（还有 {skipped} 张没读）", "text": "",
-                    "note": f"一份文档最多读 {MAX_IMAGES} 张图，剩下的只列了名字"})
 
-    out["ok"] = True
-    return out
+def format_result(result: dict, name: str) -> str:
+    """Format an existing result without another parse or paid image request."""
+    if not result["ok"]:
+        return f"读不了 {name}：{result['error']}"
+    body = _compose(result)
+    return f"{name} 的正文：\n{body}" if body else ""
 
 
 def as_prompt_block(path: str | Path, with_images: bool = True,
                     image_question: str = "") -> str:
-    """
-    给模型看的一段文本。fs_read / 对话窗附件都走这个。
-
-    失败时返回的是**说明**，不是异常 —— 她照实说自己没读到，
-    而不是编一份文档出来。
-    """
-    r = read(path, with_images=with_images, image_question=image_question)
-    name = Path(path).name
-
-    if not r["ok"]:
-        return f"读不了 {name}：{r['error']}"
-
-    parts = [f"【{name}】" if False else f"{name} 的正文："]
-
-    if r["text"]:
-        parts.append(r["text"])
-    else:
-        parts.append("（正文是空的，或者只有图片）")
-
-    if r["images"]:
-        parts.append("")
-        parts.append(f"—— 文档里的 {len(r['images'])} 张图 ——")
-        for i, im in enumerate(r["images"], 1):
-            if im.get("text"):
-                parts.append(f"[图{i}｜{Path(im['name']).name}]\n{im['text']}")
-            elif im.get("note"):
-                parts.append(f"[图{i}｜{Path(im['name']).name}]（没读：{im['note']}）")
-
-    return "\n".join(parts)
+    return format_result(read(path, with_images=with_images, image_question=image_question),
+                         Path(path).name)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -469,9 +455,9 @@ def selftest() -> int:
     check("整份读成功", r["ok"] and "结题报告" in r["text"])
     check("关掉图片时不列图", r["images"] == [])
 
-    # 整份读（带图）—— 没配视觉接口时应该给说明而不是崩
+    # 带图必须完整成功；未配置视觉时整份失败，不把部分内容当成功。
     r = read(tmp / "有图.docx")
-    check("带图也能读完整份", r["ok"])
+    check("带图成功或明确说明整份失败", r["ok"] or bool(r["error"]))
     if r["images"]:
         note = r["images"][0].get("note") or ""
         text_i = r["images"][0].get("text") or ""

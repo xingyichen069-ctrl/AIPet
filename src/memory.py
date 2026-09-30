@@ -470,15 +470,66 @@ def score_entry(entry: dict, query_toks: set[str], ref: datetime,
     return s
 
 
+def format_memory_entry(entry: dict, *, mark_speaker: bool = True) -> str:
+    """Render the same identity/source wrapper for context and recall tools."""
+    when = parse_ts(entry["ts"]).strftime("%Y-%m-%d")
+    kind = speaker_kind(entry)
+    if kind == "person":
+        who = f"群里「{entry.get('speaker_name') or '某个群友'}」说的，不是主人"
+    elif kind == "guest":
+        who = "群里有人说的，不是主人"
+    else:
+        who = "主人"
+    source = entry.get("source") or "未标注"
+    identity = f"{who}；" if mark_speaker else ""
+    origin = f"［{identity}来源：{source}；记忆ID：{entry['id']}］"
+    progress = entry.get("_progress_text", "")
+    extra = f" → 当前：{progress}" if progress else ""
+    mark = "★" * entry.get("importance", 3)
+    tags = f" #{' #'.join(entry['tags'])}" if entry.get("tags") else ""
+    cut = "［记忆片段已截取，原记录未改动］" if entry.get("_truncated") else ""
+    return f"- [{when}] {origin} {entry['text']}{cut}{extra} {mark}{tags}"
+
+
+def format_memories(entries: list[dict], *, mark_speaker: bool = True,
+                    budget_tokens: int | None = None) -> str:
+    """Render the shared block; an explicit budget also covers empty results."""
+    if entries:
+        text = "## 相关回忆\n" + "\n".join(
+            format_memory_entry(e, mark_speaker=mark_speaker) for e in entries)
+    elif budget_tokens is not None:
+        text = "## 相关回忆\n- （没有可在本轮预算内展示的相关记忆）"
+    else:
+        return ""
+    if budget_tokens is not None and estimate_tokens(text) > _read_limit(budget_tokens, 0):
+        return ""
+    return text
+
+
+def _read_limit(value, default: int) -> int:
+    try:
+        return max(0, int(value)) if not isinstance(value, bool) else default
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
 def retrieve(query: str, query_tags: list[str] | None = None,
              budget_tokens: int | None = None, top_k: int | None = None,
              retrieval: dict | None = None) -> list[dict]:
-    """按分数检索记忆，受 token 预算和条数上限约束。"""
+    """Return read-only excerpts bounded by estimated rendered tokens/count.
+
+    Ranked hits, progress facts and recent fallbacks all pass through the same
+    final budget. This does not bound persona, profile or the complete request.
+    """
     # 本轮参数由调用者显式传入。不要把一次请求的档位写回全局 CFG，
     # 否则桌面、QQ 和后台任务并发时会互相污染检索边界。
     r = retrieval or CFG["retrieval"]
-    budget = budget_tokens if budget_tokens is not None else r["token_budget"]
-    k = top_k if top_k is not None else r["max_entries"]
+    budget = _read_limit(budget_tokens if budget_tokens is not None else r["token_budget"], 0)
+    k = _read_limit(r["max_entries"], 0)
+    if top_k is not None:
+        k = min(k, _read_limit(top_k, 0))
+    if budget <= 0 or k <= 0:
+        return []
 
     entries = load_journal()
     if not entries:
@@ -497,36 +548,41 @@ def retrieve(query: str, query_tags: list[str] | None = None,
     candidate_k = min(len(scored), max(k * 4, 64))
     scored = heapq.nlargest(candidate_k, scored, key=lambda x: x[0])
 
-    picked: list[dict] = []
-    used = 0
-    seen_ids = set()
+    candidates = [{**e, "_score": round(s, 4)} for s, e in scored]
+    candidates.extend({**e, "_score": 0.0, "_progress": True}
+                      for e in entries if e.get("progress"))
+    floor = min(k, _read_limit(r.get("recency_floor", 0), 0))
+    candidates.extend({**e, "_score": 0.0, "_floor": True}
+                      for e in sorted(entries, key=lambda x: x["ts"], reverse=True)[:floor])
 
-    for s, e in scored:
+    picked: list[dict] = []
+    seen_ids = set()
+    for candidate in candidates:
         if len(picked) >= k:
             break
-        cost = estimate_tokens(e["text"])
-        if used + cost > budget and picked:
-            break
-        picked.append({**e, "_score": round(s, 4)})
-        seen_ids.add(e["id"])
-        used += cost
-
-    # 带 progress 规则的条目（年级、工龄这类）**永远注入**。
-    # 它们描述的是"用户现在处于什么阶段"，每次对话都用得上，
-    # 不该因为关键词没匹配上就被漏掉。
-    for e in entries:
-        if e.get("progress") and e["id"] not in seen_ids:
-            picked.append({**e, "_score": 0.0, "_progress": True})
-            seen_ids.add(e["id"])
-
-    # 近期兜底：保证短期连贯性，不受分数影响
-    floor = r["recency_floor"]
-    if floor > 0:
-        for e in sorted(entries, key=lambda x: x["ts"], reverse=True)[:floor]:
-            if e["id"] not in seen_ids:
-                picked.append({**e, "_score": 0.0, "_floor": True})
-                seen_ids.add(e["id"])
-
+        if candidate["id"] in seen_ids:
+            continue
+        seen_ids.add(candidate["id"])
+        # New dictionaries and a captured progress label leave cached/disk
+        # records untouched, and keep cost stable between selection/rendering.
+        candidate["_progress_text"] = compute_progress(candidate, ref)
+        if estimate_tokens(format_memories(picked + [candidate])) <= budget:
+            picked.append(candidate)
+            continue
+        text = candidate["text"]
+        low, high, fitted = 1, len(text) - 1, None
+        while low <= high:
+            middle = (low + high) // 2
+            excerpt = {**candidate, "text": text[:middle], "_truncated": True}
+            if estimate_tokens(format_memories(picked + [excerpt])) <= budget:
+                fitted = excerpt
+                low = middle + 1
+            else:
+                high = middle - 1
+        if fitted is not None:
+            picked.append(fitted)
+        # A large identity wrapper may itself not fit; later short candidates
+        # must still get a chance instead of stopping the whole search.
     return picked
 
 
@@ -599,6 +655,7 @@ def build_context(query: str, query_tags: list[str] | None = None,
                   retrieval: dict | None = None) -> str:
     """组装要注入 prompt 的记忆片段。"""
     st = load_state()
+    retrieval = retrieval or CFG["retrieval"]
     mem = retrieve(query, query_tags, retrieval=retrieval)
 
     parts = ["## 当前关系状态"]
@@ -625,31 +682,11 @@ def build_context(query: str, query_tags: list[str] | None = None,
     except ImportError:
         pass
 
-    parts.append("\n## 相关回忆")
-    if mem:
-        mark_guest = CFG.get("speaker", {}).get("mark_in_context", True)
-        for e in mem:
-            when = parse_ts(e["ts"]).strftime("%m月%d日")
-            mark = "★" * e.get("importance", 3)
-            tag = f" #{' #'.join(e['tags'])}" if e.get("tags") else ""
-            # 有 progress 规则的条目，把当前状态现算出来附在后面
-            prog = compute_progress(e)
-            extra = f"　→ 当前：{prog}" if prog else ""
-            # ★ 外人说的必须标出来，否则模型会当成关于主人的事实。
-            # 这不是权重问题 —— 群里有人报自己的生日，被记成"用户的生日"
-            # 就是彻头彻尾的错。
-            who = ""
-            # 认得出来的人就点名，认不出的说"有人"。
-            if mark_guest:
-                k = speaker_kind(e)
-                if k == "person":
-                    nm = e.get("speaker_name") or "某个群友"
-                    who = f"［群里「{nm}」说的，不是主人］ "
-                elif k == "guest":
-                    who = "［群里有人说的，不是主人］ "
-            parts.append(f"- [{when}] {who}{e['text']}{extra} {mark}{tag}")
-    else:
-        parts.append("- （没有相关记忆）")
+    memory_block = format_memories(
+        mem, mark_speaker=CFG.get("speaker", {}).get("mark_in_context", True),
+        budget_tokens=retrieval["token_budget"])
+    if memory_block:
+        parts.append("\n" + memory_block)
 
     parts.append("\n## 关于用户的事实")
     parts.append(_profile_facts())
@@ -916,7 +953,7 @@ def main() -> None:
             print("没有命中。")
         for e in hits:
             flag = "(近期兜底)" if e.get("_floor") else f"score={e['_score']}"
-            print(f"  [{e['ts'][:10]}] {e['text']}  {flag}")
+            print(f"{format_memory_entry(e)}  {flag}")
 
     elif cmd == "context":
         q = rest[0] if rest else ""

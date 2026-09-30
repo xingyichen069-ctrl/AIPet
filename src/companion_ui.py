@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import math
 import sys
+import threading
 import time
-from PySide6.QtCore import Qt, QTimer, Signal, QUrl, QRectF, QPointF, QByteArray, Slot
+from pathlib import Path
+from PySide6.QtCore import Qt, QTimer, Signal, QUrl, QRectF, QPointF, QByteArray, Slot, QObject
 from PySide6.QtGui import (QDesktopServices, QKeySequence, QShortcut, QTextCursor,
     QPainter, QColor, QPen, QPainterPath, QLinearGradient, QPalette, QFont)
 from PySide6.QtWidgets import (QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
@@ -319,6 +321,40 @@ class Composer(QPlainTextEdit):
         event.acceptProposedAction()
 
 
+class AttachmentTask(QObject):
+    """A cancellable daemon worker; it never owns or writes a chat widget.
+
+    Python daemon threads cannot hold application shutdown hostage to a network
+    timeout. Qt delivers the result to the receiver's main thread, if it exists.
+    """
+    completed = Signal(int, str, object, str)
+
+    def __init__(self, token, session, path):
+        super().__init__()
+        self.token, self.session, self.path = token, session, path
+        self.cancelled = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True, name='AIPet-attachment')
+
+    def start(self):
+        self.thread.start()
+
+    def cancel(self):
+        self.cancelled.set()
+
+    def _run(self):
+        result, error = None, ''
+        try:
+            result = C.read_attachment(self.path, cancelled=self.cancelled.is_set)
+        except (ValueError, OSError) as exc:
+            error = str(exc)
+        except Exception as exc:
+            error = f'读取未完成（{type(exc).__name__}），请检查文件后重试。'
+        try:
+            self.completed.emit(self.token, self.session, result, error)
+        except RuntimeError:
+            pass  # Application teardown can delete the Qt signal object.
+
+
 class ChatWindow(QWidget):
     def __init__(self, pet, worker_cls):
         super().__init__()
@@ -340,6 +376,9 @@ class ChatWindow(QWidget):
         self._save_timer.timeout.connect(self._flush_ui)
         self.worker = None
         self.attachment = None
+        self._attachment_serial = 0
+        self._attachment_pending = None
+        self._attachment_jobs = {}
         self.cur_reply = []
         self.cur_bubble = None
         self.current_id = None
@@ -483,6 +522,7 @@ class ChatWindow(QWidget):
             self.input.setToolTip('草稿暂时无法保存，请先保留文字再退出')
 
     def _restore_draft(self):
+        self._cancel_attachment_read()
         self._draft_session = self.store.session()
         drafts = self.desktop_state.data.get('drafts', {})
         draft = drafts.get(self._draft_session, {}) if isinstance(drafts, dict) else {}
@@ -515,6 +555,7 @@ class ChatWindow(QWidget):
 
     def prepare_quit(self):
         self._closing_application = True
+        self._cancel_attachment_read()
         self._flush_ui()
 
     def hideEvent(self, event):
@@ -782,17 +823,72 @@ class ChatWindow(QWidget):
             self.load_attachment(path)
 
     def load_attachment(self, path):
-        if self.busy():
+        if self.busy() or self._closing_application:
+            return
+        expensive = Path(path).suffix.lower() in C.IMAGE_SUFFIX | {'.docx', '.doc'}
+        # A cancelled provider request may still be ending. Bound concurrent
+        # workers while allowing one replacement without waiting for its timeout.
+        if expensive and len(self._attachment_jobs) >= 2:
+            self.add_bubble('之前的读取请求还在结束，请稍后再添加材料。', 'sys')
+            return
+        self._cancel_attachment_read()
+        self.attachment = None
+        self.attachment_btn.hide()
+        self._flush_ui()
+        if expensive:
+            token = self._attachment_serial
+            session = self.store.session()
+            task = AttachmentTask(token, session, path)
+            self._attachment_pending = token
+            self._attachment_jobs[token] = task
+            task.completed.connect(self._attachment_finished)
+            self.attachment_btn.setText('正在读取：' + Path(path).name + '  × 取消')
+            self.attachment_btn.setToolTip('点击取消读取；已经发出的识别请求可能仍会计费')
+            self.attachment_btn.show()
+            self.btn.setEnabled(False)
+            task.start()
             return
         try:
             self.attachment = C.read_attachment(path)
-            self.attachment_btn.setText('材料：' + self.attachment['name'] + '  ×')
-            self.attachment_btn.show()
+            self._show_attachment()
             self._flush_ui()
         except (ValueError, OSError) as e:
             QMessageBox.information(self, '材料', str(e))
 
+    def _cancel_attachment_read(self):
+        self._attachment_serial += 1
+        self._attachment_pending = None
+        for job in self._attachment_jobs.values():
+            job.cancel()
+        if hasattr(self, 'btn') and not self.busy():
+            self.btn.setEnabled(not self._closing_application)
+
+    def _show_attachment(self):
+        self.attachment_btn.setVisible(bool(self.attachment))
+        self.attachment_btn.setToolTip('点击移除材料；材料会随下一条消息发送')
+        if self.attachment:
+            self.attachment_btn.setText('材料：' + self.attachment['name'] + '  ×')
+
+    @Slot(int, str, object, str)
+    def _attachment_finished(self, token, session, result, error):
+        task = self._attachment_jobs.pop(token, None)
+        if task is not None:
+            task.deleteLater()
+        if (token != self._attachment_pending or self._closing_application
+                or session != self._draft_session or session != self.store.session()):
+            return
+        self._attachment_pending = None
+        self.btn.setEnabled(not self.busy())
+        if error:
+            self.attachment = None
+            self.add_bubble('材料未添加：' + error, 'sys')
+        else:
+            self.attachment = result
+        self._show_attachment()
+        self._flush_ui()
+
     def remove_attachment(self):
+        self._cancel_attachment_read()
         self.attachment = None
         self.attachment_btn.hide()
         self._flush_ui()
@@ -817,7 +913,7 @@ class ChatWindow(QWidget):
 
     def send(self):
         q = self.input.toPlainText().strip()
-        if self.busy() or (not q and not self.attachment):
+        if self._closing_application or self._attachment_pending is not None or self.busy() or (not q and not self.attachment):
             return
         q = q or '请帮我解释这份材料。'
         if len(q) > 24000:
@@ -853,7 +949,7 @@ class ChatWindow(QWidget):
         self._start(context, history)
 
     def retry_last(self):
-        if self.busy():
+        if self._closing_application or self._attachment_pending is not None or self.busy():
             return
         m = self.store.last_user()
         if not m or m['status'] not in ('failed', 'cancelled', 'pending'):

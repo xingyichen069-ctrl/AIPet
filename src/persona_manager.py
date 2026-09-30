@@ -26,12 +26,12 @@ class PersonaManager:
     @staticmethod
     def _display_name(folder: Path, soul: Path) -> str:
         try:
-            for line in soul.read_text(encoding="utf-8").splitlines():
+            for line in soul.read_text(encoding="utf-8-sig").splitlines():
                 if line.startswith("#"):
                     title = line.lstrip("#").strip()
                     if title:
                         return title.replace("的人格", "")
-        except OSError:
+        except (OSError, UnicodeError):
             pass
         return folder.name
 
@@ -203,12 +203,38 @@ class PersonaManager:
         return self.save_soul(pid, soul, name=name)
 
     def import_soul(self, source: str | Path, pid: str | None = None) -> dict:
+        """Import an independent copy without changing its text or active persona."""
         source = Path(source)
-        text = source.read_text(encoding="utf-8")
-        target = self.slug(pid or source.stem)
-        if target == "soul":
-            target = "imported-persona"
-        return self.save_soul(target, text, name=source.stem)
+        raw = source.read_bytes()
+        if not raw.decode("utf-8-sig").strip():
+            raise ValueError("人格内容不能为空。")
+        base = self.slug(pid or source.stem)
+        if base == "soul":
+            base = "imported-persona"
+        index = 1
+        while True:
+            target = base if index == 1 else f"{base}-{index}"
+            occupied = {p.name.casefold() for p in self.characters_dir.iterdir()}
+            occupied.add(self.active_id().casefold())
+            folder = self.characters_dir / target
+            if target.casefold() not in occupied:
+                try:
+                    # Reserve the directory before writing; another import may race us.
+                    folder.mkdir()
+                    break
+                except FileExistsError:
+                    pass
+            index += 1
+        try:
+            soul = folder / "SOUL.md"
+            with soul.open("xb") as stream:
+                stream.write(raw)
+            return {"id": target, "name": self._display_name(folder, soul),
+                    "path": str(folder), "soul": str(soul), "avatar": "", "active": False}
+        except BaseException:
+            # Only this call's newly reserved directory can be removed.
+            shutil.rmtree(folder)
+            raise
 
     def import_avatar(self, source: str | Path, pid: str | None = None) -> str:
         source = Path(source)

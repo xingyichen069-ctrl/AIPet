@@ -64,8 +64,12 @@ class PersonaDialog(QDialog):
         self.list.blockSignals(True)
         self.list.clear()
         row = 0
+        seen_names = {}
         for i, item in enumerate(self.items):
-            label = item["name"] + ("  · 当前" if item["active"] else "")
+            name = item["name"]
+            seen_names[name] = seen_names.get(name, 0) + 1
+            label = name + (f"（同名 {seen_names[name]}）" if seen_names[name] > 1 else "")
+            label += "  · 当前" if item["active"] else ""
             self.list.addItem(label)
             if select_id == item["id"] or (select_id is None and item["active"]):
                 row = i
@@ -138,6 +142,8 @@ class PersonaDialog(QDialog):
         try:
             item = self.manager.import_soul(path)
             self._reload(item["id"])
+            QMessageBox.information(self, "人格管理", "已导入为独立副本，原有人格和当前选择保持不变。\n"
+                                    "检查内容后，可点击“设为当前”。")
         except (ValueError, OSError, UnicodeError) as e:
             QMessageBox.information(self, "人格管理", f"导入失败：{e}")
 

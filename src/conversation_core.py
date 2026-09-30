@@ -45,6 +45,10 @@ def desktop_system(query: str, options: dict) -> str:
     """Build the normal desktop system prompt from an existing snapshot."""
     body = T.system_block(query, resolved=options) + "\n\n" + M.build_context(
         query, retrieval=options["retrieval"])
+    import knowledge as K
+    references = K.as_prompt_block(query)
+    if references:
+        body += "\n\n" + references
     from companion import Store, task_description
     if (M.ROOT / "data" / "companion.sqlite3").exists():
         agreements = Store(M.ROOT).tasks()

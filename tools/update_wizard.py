@@ -46,9 +46,13 @@ def inspect_migration(source: Path, target: Path):
                 raise ValueError(f"旧 config.json 的 {section} 格式不对。")
             key = "docs_dir" if section == "knowledge" else "model"
             value = values.get(key)
+            if value is not None and not isinstance(value, str):
+                raise ValueError(f"旧 config.json 的 {section}.{key} 应是文字路径。")
             if value and value != defaults.get(section, {}).get(key):
                 if section == "knowledge":
                     notes.append("自定义知识库目录不另行复制，请保留原目录并核对 config.json 中的 knowledge.docs_dir。")
+                elif values.get("enabled", defaults.get("live2d", {}).get("enabled", False)) is False:
+                    notes.append("Live2D 已关闭，未检查或复制未使用的自定义模型；日后启用前请另行复制模型。")
                 elif not (target / value).is_file():
                     raise ValueError("旧配置使用了自定义 Live2D 模型，新目录找不到该模型。"
                                      "请先按 config.json 中 live2d.model 的位置复制对应模型文件夹，再重新迁移。")

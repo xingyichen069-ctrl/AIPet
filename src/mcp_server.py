@@ -118,17 +118,9 @@ def _t_context(query: str) -> str:
 def _t_recall(query: str, limit: int | None = None) -> str:
     import memory as M
     import thinking as T
-    T.apply_to_memory(query)          # 让检索深度跟随面板档位
-    hits = M.retrieve(query, top_k=limit)
-    if not hits:
-        return "（没有相关记忆）"
-    out = []
-    for e in hits:
-        when = M.parse_ts(e["ts"]).strftime("%m月%d日")
-        mark = "★" * e.get("importance", 3)
-        tag = f" #{' #'.join(e['tags'])}" if e.get("tags") else ""
-        out.append(f"- [{when}] {e['text']} {mark}{tag}")
-    return "\n".join(out)
+    snapshot = T.apply_to_memory(query=query)
+    hits = M.retrieve(query, top_k=limit, retrieval=snapshot["retrieval"])
+    return M.format_memories(hits, budget_tokens=snapshot["retrieval"]["token_budget"])
 
 
 def _t_remember(text: str, importance: int = 3, tags: str = "",

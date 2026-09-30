@@ -261,6 +261,53 @@ class Onboarding(unittest.TestCase):
             WIZ.inspect_migration(self.old, self.new)
         self.assertEqual(bootstrap.read_object(self.new / "data/secrets.json")["deepseek_api_key"], "")
 
+    def test_disabled_custom_live2d_does_not_block_migration(self):
+        self.populate_old()
+        bootstrap.initialize(self.new)
+        path = self.old / "data/config.json"
+        config = bootstrap.read_object(path)
+        config["live2d"].update(enabled=False, model="custom/missing.model3.json")
+        path.write_text(json.dumps(config), encoding="utf-8")
+        original = path.read_bytes()
+        rows, notes = WIZ.inspect_migration(self.old, self.new)
+        self.assertTrue(any("Live2D 已关闭" in note for note in notes))
+        MIG.apply(rows, self.new)
+        self.assertEqual((self.new / "data/config.json").read_bytes(), original)
+        config["live2d"]["enabled"] = True
+        path.write_text(json.dumps(config), encoding="utf-8")
+        clean = self.install("another-clean")
+        bootstrap.initialize(clean)
+        with self.assertRaisesRegex(ValueError, "自定义 Live2D"):
+            WIZ.inspect_migration(self.old, clean)
+
+    def test_bad_sqlite_has_actionable_error_before_target_changes(self):
+        self.populate_old()
+        bootstrap.initialize(self.new)
+        (self.old / "data/companion.sqlite3").write_bytes(b"SYNTHETIC_NOT_A_DATABASE")
+        rows, _ = WIZ.inspect_migration(self.old, self.new)
+        before = {p: p.read_bytes() for p in self.new.rglob("*") if p.is_file()}
+        with self.assertRaisesRegex(ValueError, "陪伴数据库.*迁移未完成"):
+            MIG.apply(rows, self.new)
+        self.assertEqual(before, {p: p.read_bytes() for p in self.new.rglob("*") if p.is_file()})
+
+    def test_busy_sqlite_migration_stops_without_target_changes(self):
+        self.populate_old()
+        bootstrap.initialize(self.new)
+        writer = sqlite3.connect(self.old / "data/companion.sqlite3")
+        try:
+            writer.execute("CREATE TABLE marker (text)")
+            writer.commit()
+            writer.execute("BEGIN EXCLUSIVE")
+            rows, _ = WIZ.inspect_migration(self.old, self.new)
+            before = {p: p.read_bytes() for p in self.new.rglob("*") if p.is_file()}
+            with patch.object(MIG, "SQLITE_BUSY_SECONDS", 0.05):
+                with self.assertRaisesRegex(ValueError, "数据库仍被占用"):
+                    MIG.apply(rows, self.new)
+            self.assertEqual(before, {p: p.read_bytes() for p in self.new.rglob("*") if p.is_file()})
+        finally:
+            writer.rollback()
+            writer.close()
+
 
 if __name__ == "__main__":
     unittest.main()

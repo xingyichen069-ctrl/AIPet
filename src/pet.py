@@ -1364,6 +1364,8 @@ class PetWindow(QWidget):
         if getattr(self, "_quitting", False):
             os._exit(0)                     # 第二次点 = 不等了
         self._quitting = True
+        if self.chat:
+            self.chat.prepare_quit()
 
         workers = [w for w in (self.chat.worker if self.chat else None,
                                self.prober, self.updater)

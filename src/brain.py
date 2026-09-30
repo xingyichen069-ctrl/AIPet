@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import os
 import sys
@@ -308,6 +309,7 @@ def _stream(query: str, history: list[dict] | None = None,
     payload, r = build_payload(
         query, history, level, stream=True, system=system,
         max_tokens=max_tokens, options=options, policy=policy)
+    tool_retrieval = deepcopy(r.get("retrieval"))
 
     if LT:
         policy = LT.make_policy(allowed_tools={t["function"]["name"] for t in payload.get("tools", [])})
@@ -436,8 +438,11 @@ def _stream(query: str, history: list[dict] | None = None,
             shown = ", ".join(f"{k}={v!r}" for k, v in args.items())
             yield ("tool", f"⚙ {s['name']}({shown})")
 
-            result = (LT.call(s["name"], args, policy=policy, deadline=deadline)
-                      if LT else "工具模块未加载")
+            if LT:
+                with LT.bind_context(retrieval=tool_retrieval):
+                    result = LT.call(s["name"], args, policy=policy, deadline=deadline)
+            else:
+                result = "工具模块未加载"
             if _stopped(cancelled, deadline):
                 return
             first = result.strip().splitlines()[0] if result.strip() else "(空)"

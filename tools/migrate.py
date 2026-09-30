@@ -51,6 +51,7 @@ import hashlib
 import json
 import sqlite3
 import tempfile
+import time
 import uuid
 import os
 import re
@@ -62,6 +63,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import bootstrap
+
+SQLITE_BUSY_SECONDS = 3.0
 
 if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("-", "") != "utf8":
     try:
@@ -228,11 +231,24 @@ def _digest(path: Path) -> str:
 def _snapshot(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     if source.name == "companion.sqlite3":
-        with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)) as old:
-            with closing(sqlite3.connect(destination)) as new:
-                old.backup(new)
-                if new.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
-                    raise ValueError("陪伴数据库检查未通过，请保留旧目录。")
+        last_progress = time.monotonic()
+
+        def progress(status, remaining, total):
+            nonlocal last_progress
+            if status not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                last_progress = time.monotonic()
+            elif time.monotonic() - last_progress >= SQLITE_BUSY_SECONDS:
+                raise ValueError("陪伴数据库仍被占用，迁移已停止。请退出旧桌宠及使用该目录的程序后再试；旧目录请继续保留。")
+
+        try:
+            with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.1)) as old:
+                with closing(sqlite3.connect(destination, timeout=0.1)) as new:
+                    old.backup(new, pages=128, progress=progress, sleep=0.02)
+                    if new.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                        raise ValueError("陪伴数据库检查未通过，请保留旧目录。")
+        except sqlite3.Error as exc:
+            raise ValueError("无法读取或校验陪伴数据库，本次迁移未完成。请先退出旧程序并保留旧目录；"
+                             "若仍失败，请在副本上检查数据库，不要删除原文件。") from exc
     else:
         before = _digest(source)
         shutil.copy2(source, destination)

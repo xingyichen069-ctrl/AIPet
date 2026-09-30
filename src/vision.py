@@ -28,8 +28,8 @@ data/secrets.json 里填三个值：
     vision_api_key       对方的 key（本地部署通常不校验，填任意非空串）
     vision_model         模型名，比如 qwen-vl / gpt-4o / llava
 
-**没配就是「不会看图」，不是报错**——她会照实说自己看不了，
-不会编一张图出来（BOUNDARIES.md 那条）。
+未配置或接口失败时返回明确失败结果，桌面不会把错误说明当成识别内容保存。
+兼容的字符串入口仍返回可读错误说明；识别成功不代表模型文字一定准确。
 
 > 怎么确认对方支不支持读图：拿一张有字的图调一次，
 > 能读出内容就行。只支持纯文本的接口会报参数错误。
@@ -84,23 +84,30 @@ DEFAULT_QUESTION = (
 
 def load_secrets() -> dict:
     try:
-        return json.loads(SECRETS.read_text(encoding="utf-8-sig"))
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(SECRETS.read_text(encoding="utf-8-sig"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
         return {}
 
 
 def config() -> dict:
     d = load_secrets()
+    def field(name):
+        value = d.get(name, "")
+        return value.strip() if isinstance(value, str) else ""
     return {
-        "key": d.get("vision_api_key", ""),
-        "base": (d.get("vision_base_url") or "").rstrip("/"),
-        "model": d.get("vision_model") or "",
+        "key": field("vision_api_key"),
+        "base": field("vision_base_url").rstrip("/"),
+        "model": field("vision_model"),
     }
 
 
 def available() -> tuple[bool, str]:
     """能不能看图。第二个返回值是原因，不能看时给她照实说。"""
-    c = config()
+    return _availability(config())
+
+
+def _availability(c: dict) -> tuple[bool, str]:
     if not c["base"] or not c["key"]:
         return False, ("没配读图的接口（data/secrets.json 里缺 "
                        "vision_base_url / vision_api_key）")
@@ -131,77 +138,81 @@ def _data_url(p: Path) -> str:
     return f"data:{mime};base64," + base64.b64encode(p.read_bytes()).decode()
 
 
-def read(path: str | Path, question: str = "", timeout: float = 90) -> str:
-    """
-    读一张图。返回文字，或者一句说明为什么没读成。
+def _failure(message: str, cancelled: bool = False) -> dict:
+    return {"ok": False, "text": "", "error": message, "cancelled": cancelled}
 
-    ★ 失败一律返回**说明文字**而不是抛异常。调用方是模型，
-      它拿到异常多半会编一段看起来像结果的描述 —— 那比说"看不了"糟糕得多。
+
+def read_result(path: str | Path, question: str = "", timeout: float = 90,
+                *, cancelled=None) -> dict:
+    """Return an explicit result so an error cannot become attachment content.
+
+    Cancellation discards the result and prevents the next request; it cannot
+    undo a request already accepted by the provider.
     """
     p = Path(path)
-
-    # ★ 后缀白名单。不是「顺手校验一下」——这是防数据外泄的闸门。
-    #   它会把这文件整份 base64 编码发到校外服务器上。没有这道检查，
-    #   see_image("data/secrets.json") 读不出内容，但密钥已经出门了。
+    stopped = cancelled or (lambda: False)
+    if stopped():
+        return _failure("已取消读取。", True)
     if p.suffix.lower() not in MIME:
-        return (f"{p.name} 不是图片（支持 {'、'.join(sorted(MIME))}）。"
-                f"我只能看图片，别的文件读了也认不出来。")
-
+        return _failure(f"{p.name} 不是图片（支持 {'、'.join(sorted(MIME))}）。")
     if not p.exists():
-        return f"找不到这个文件：{p}"
+        return _failure(f"找不到这个文件：{p}")
     if p.is_dir():
-        return f"{p} 是目录，不是图片"
+        return _failure(f"{p} 是目录，不是图片")
     try:
-        size = p.stat().st_size
-    except OSError as e:
-        return f"读不了这个文件：{e}"
-
-    # ★ 再嗅一下文件头。后缀能改，内容是改不了的 ——
-    #   有人把 secrets.json 改名成 .png，后缀那道闸门就放它过去了，
-    #   然后整份 base64 发到校外。这里按真实格式再判一次。
-    try:
-        head = p.open("rb").read(12)
-    except OSError as e:
-        return f"读不了这个文件：{e}"
-    if not _looks_like_image(head):
-        return f"{p.name} 的扩展名是图片，但内容不是（文件头对不上）。不发。"
-    if size > MAX_BYTES:
-        return (f"这张图 {size / 1048576:.1f} MB，超过 {MAX_BYTES // 1048576} MB 上限。"
-                f"先压一下或者截小点。")
-
-    ok, why = available()
-    if not ok:
-        return f"看不了图 —— {why}。"
-
-    c = config()
-    body = {
-        "model": c["model"],
-        "max_tokens": 1200,
-        "temperature": 0,          # 读图要的是稳定，不是发挥
-        "messages": [{
-            "role": "user",
-            "content": [
+        # Read one bounded snapshot: validate exactly the bytes sent, even if
+        # the source file is replaced while the worker is reading it.
+        with p.open("rb") as handle:
+            raw = handle.read(MAX_BYTES + 1)
+        if len(raw) > MAX_BYTES:
+            return _failure(f"图片超过 {MAX_BYTES // 1048576} MB 上限，请先压缩或截小。")
+        if not _looks_like_image(raw[:12]):
+            return _failure(f"{p.name} 的扩展名是图片，但内容不是（文件头对不上）。不发。")
+        c = config()
+        ok, why = _availability(c)
+        if not ok:
+            return _failure(f"看不了图 —— {why}。")
+        data_url = f"data:{MIME[p.suffix.lower()]};base64," + base64.b64encode(raw).decode()
+        body = {
+            "model": c["model"], "max_tokens": 1200, "temperature": 0,
+            "messages": [{"role": "user", "content": [
                 {"type": "text", "text": question or DEFAULT_QUESTION},
-                {"type": "image_url", "image_url": {"url": _data_url(p)}},
-            ],
-        }],
-    }
-    req = urllib.request.Request(
-        f"{c['base']}/chat/completions",
-        data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {c['key']}"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            d = json.loads(r.read().decode("utf-8"))
-        text = (d["choices"][0]["message"]["content"] or "").strip()
-        return text or "（模型没说出内容）"
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "ignore")[:200]
-        return f"读图接口报错 {e.code}：{detail}"
-    except Exception as e:
-        return f"读图失败：{type(e).__name__}: {e}"
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ]}],
+        }
+        req = urllib.request.Request(
+            f"{c['base']}/chat/completions", data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {c['key']}"},
+        )
+        if stopped():
+            return _failure("已取消读取。", True)
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            payload = response.read(2 * 1024 * 1024 + 1)
+        if stopped():
+            return _failure("已取消读取。", True)
+        if len(payload) > 2 * 1024 * 1024:
+            return _failure("读图接口返回内容过大，请检查接口或缩小图片。")
+        choice = json.loads(payload.decode("utf-8"))["choices"][0]
+        text = choice["message"]["content"]
+        if choice.get("finish_reason") == "length":
+            return _failure("读图结果被接口截断，请将图片拆小后重试。")
+        if not isinstance(text, str) or not text.strip():
+            return _failure("读图接口没有返回可用文字。")
+        return {"ok": True, "text": text.strip(), "error": "", "cancelled": False}
+    except urllib.error.HTTPError as exc:
+        # Provider error bodies can echo request data; do not turn them into
+        # saved material or expose credentials in a diagnostic message.
+        return _failure(f"读图接口报错 {exc.code}，请检查接口配置、权限和额度后重试。")
+    except (AttributeError, KeyError, IndexError, TypeError, ValueError):
+        return _failure("读图接口配置或返回格式不正确，请核对视觉服务。")
+    except OSError:
+        return _failure("读图失败：文件无法读取，或接口连接失败/超时，请检查后重试。")
+
+
+def read(path: str | Path, question: str = "", timeout: float = 90) -> str:
+    """Compatibility text interface for existing tools and command-line use."""
+    result = read_result(path, question, timeout)
+    return result["text"] if result["ok"] else result["error"]
 
 
 # ═══════════════════════════════════════════════════════════════
