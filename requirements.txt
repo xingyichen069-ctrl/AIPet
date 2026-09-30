@@ -3,3 +3,5 @@ live2d-py==0.7.0.4
 PyOpenGL==3.1.10
 PySocks==1.7.1
 ddgs==9.16.0
+# Routing adapter uses per-client proxy clearing; keep in sync with src/proxy.py.
+primp==2.0.1

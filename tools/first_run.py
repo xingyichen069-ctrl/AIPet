@@ -13,7 +13,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 import bootstrap
 
-DEPENDENCY_CHECK = "import PySide6.QtWidgets, live2d.v3, OpenGL, socks, ddgs"
+DEPENDENCY_CHECK = """
+import sys
+import PySide6.QtWidgets, live2d.v3, OpenGL, socks, primp
+from ddgs.ddgs import DDGS
+from importlib.metadata import version
+# The search routing adapter uses these fixed client APIs.
+sys.exit(0 if version('ddgs') == '9.16.0' and version('primp') == '2.0.1' else 1)
+"""
 
 
 def platform_error() -> str:
@@ -61,7 +68,7 @@ def prepare_environment(root: Path) -> Path:
             raise RuntimeError("创建环境失败。请检查当前目录是否可写，以及 Python 是否完整安装。")
     quiet = dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if _run([str(interpreter), "-c", DEPENDENCY_CHECK], root, **quiet):
-        print("依赖尚未就绪，首次需要联网下载。已有配置不会被覆盖。", flush=True)
+        print("依赖缺失或版本需要更新，正在联网准备。已有配置不会被覆盖。", flush=True)
         uv = shutil.which("uv")
         if uv:
             command = [uv, "pip", "install", "--python", str(interpreter)]
@@ -78,7 +85,7 @@ def prepare_environment(root: Path) -> Path:
             if _run(command + ["--index-url", "https://pypi.org/simple"], root):
                 raise RuntimeError("依赖安装未完成。请检查上面的网络或版本错误，修正后重新运行准备环境。")
         if _run([str(interpreter), "-c", DEPENDENCY_CHECK], root, **quiet):
-            raise RuntimeError("依赖仍无法导入，环境尚未准备好。请保留本窗口的错误信息排查。")
+            raise RuntimeError("依赖仍无法导入或版本不符，环境尚未准备好。请保留本窗口的错误信息排查。")
     return interpreter
 
 

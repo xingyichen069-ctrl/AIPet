@@ -221,6 +221,30 @@ class Onboarding(unittest.TestCase):
                 self.assertEqual(FIRST.prepare_environment(self.new), interpreter)
                 self.assertEqual(run.call_count, 1)
 
+    def test_search_client_versions_are_checked_even_when_imports_succeed(self):
+        for versions, expected in (({'ddgs': '9.16.0', 'primp': '2.0.1'}, 0),
+                                   ({'ddgs': '9.16.0', 'primp': '1.3.1'}, 1),
+                                   ({'ddgs': '9.15.0', 'primp': '2.0.1'}, 1)):
+            with self.subTest(versions=versions), \
+                 patch('importlib.metadata.version', side_effect=versions.__getitem__), \
+                 self.assertRaises(SystemExit) as result:
+                exec(FIRST.DEPENDENCY_CHECK, {})
+            self.assertEqual(result.exception.code, expected)
+
+    def test_old_search_dependency_triggers_project_install_and_recheck(self):
+        interpreter = self.new / 'runtime/python.exe'
+        interpreter.parent.mkdir(parents=True)
+        interpreter.touch()
+        with patch.object(FIRST, 'platform_error', return_value=''), \
+             patch.object(FIRST, 'environment_python', return_value=interpreter), \
+             patch.object(FIRST.shutil, 'which', return_value='fixture-uv'), \
+             patch.object(FIRST, '_run', side_effect=[1, 0, 0]) as run:
+            self.assertEqual(FIRST.prepare_environment(self.new), interpreter)
+        install = run.call_args_list[1].args[0]
+        self.assertIn(str(interpreter), install)
+        self.assertIn(str(self.new / 'requirements.txt'), install)
+        self.assertEqual(run.call_args_list[2].args[0][-1], FIRST.DEPENDENCY_CHECK)
+
     def test_fresh_default_max_completes_a_synthetic_reply(self):
         import brain as B
         import memory as M

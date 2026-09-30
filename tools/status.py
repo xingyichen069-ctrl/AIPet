@@ -180,7 +180,7 @@ def _proxy() -> str:
     try:
         import proxy as PX
         p = PX.detect()
-        return p or "直连（没检测到代理）"
+        return PX.display_url(p) if p else "直连（关闭代理或未检测到可用代理）"
     except Exception as e:
         return f"检测失败：{type(e).__name__}"
 

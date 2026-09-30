@@ -46,18 +46,15 @@ beta.10 > beta.9（按数字比，不按字符串）。
 
 from __future__ import annotations
 
-import contextlib
 import json
 import re
-import socket
 import sys
 import urllib.error
-import urllib.parse
-import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import memory as M  # noqa: E402
+import proxy as PX  # noqa: E402
 
 if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("-", "") != "utf8":
     try:
@@ -121,47 +118,14 @@ def is_newer(remote: str, local: str) -> bool:
 #  问 GitHub
 # ═══════════════════════════════════════════════════════════════
 
-@contextlib.contextmanager
-def _opener():
-    """
-    带上检测到的代理。
-
-    http/https 代理 urllib 自己认；**SOCKS 不认**，得靠 PySocks 把全局
-    socket 换掉。换全局是有副作用的，所以用完立刻换回来 —— 这个函数
-    会在桌宠进程里被调用，不能留下一地的全局状态。
-    """
-    import proxy as PX
-    px = PX.detect()
-    if px and px.startswith("socks"):
-        try:
-            import socks
-        except ImportError:
-            raise RuntimeError("SOCKS 代理需要 PySocks：pip install pysocks")
-        u = urllib.parse.urlparse(px)
-        kind = socks.SOCKS4 if u.scheme.startswith("socks4") else socks.SOCKS5
-        old = socket.socket
-        socks.set_default_proxy(kind, u.hostname, u.port, rdns=u.scheme.endswith("h"))
-        socket.socket = socks.socksocket
-        try:
-            yield urllib.request.build_opener()
-        finally:
-            socket.socket = old
-        return
-
-    handlers = [urllib.request.ProxyHandler({"http": px, "https": px})] if px else []
-    yield urllib.request.build_opener(*handlers)
-
-
 def fetch_tags(timeout: float = TIMEOUT) -> list[str]:
     """仓库的 tag 名列表。未登录的 GitHub 每小时 60 次，手动查够用。"""
     url = f"https://api.github.com/repos/{repo()}/tags?per_page=100"
-    req = urllib.request.Request(url, headers={
+    response = PX.request(url, timeout=timeout, headers={
         "Accept": "application/vnd.github+json",
         "User-Agent": "AIPet-update-check",
     })
-    with _opener() as op:
-        with op.open(req, timeout=timeout) as r:
-            data = json.loads(r.read().decode("utf-8"))
+    data = json.loads(response.text)
     return [str(t.get("name") or "") for t in data if isinstance(t, dict) and t.get("name")]
 
 
@@ -183,7 +147,7 @@ def check(timeout: float = TIMEOUT) -> dict:
             "，查得太频了，等一会儿再试。" if e.code == 403 else "。")
         return out
     except Exception as e:
-        out["error"] = f"连不上 GitHub：{type(e).__name__}: {str(e)[:80]}"
+        out["error"] = f"连不上 GitHub：{PX.error_text(e)}"
         return out
     if not tags:
         out["error"] = "这个仓库一个 tag 都没有。"
