@@ -1,83 +1,13 @@
 #!/usr/bin/env python3
-"""
-brain.py —— 独立大脑（插槽 B）
+"""桌面大脑：默认DeepSeek、流式对话与工具循环。
 
-接上它之后，思考强度面板上的参数就**全部真正生效**了：
+初次使用按README，通过配置API.bat填写data/secrets.json。
+当前六档参数来自thinking.json，新装默认max；省电和日常关闭思考。
+请求仍带DeepSeek专用字段，并非所有OpenAI兼容服务都能直接使用。
+当前映射为none关闭、low保留、medium/high映射high、max保留。
 
-    model          ✅ 真的换模型
-    max_tokens     ✅ 真的限制输出长度
-    reasoning_effort ✅ 真的控制思考强度
-    memory_budget  ✅ 真的控制检索深度
-    temperature    ⚠️ 见下面的坑
-
-═══════════════════════════════════════════════════════════════
-  接哪家都行
-═══════════════════════════════════════════════════════════════
-
-只要对方是 **OpenAI 兼容的 `/chat/completions`**，就能当脑子用。
-默认连 DeepSeek，换别家只要改 endpoint 和模型名：
-
-    data/secrets.json
-    {
-      "deepseek_api_key":  "你的 key",
-      "deepseek_base_url": "https://你的服务/v1"    ← 不填就走 DeepSeek 官方
-    }
-
-（键名里的 "deepseek" 是历史包袱，改掉会让老配置读不出来，所以留着。）
-模型名在 data/thinking.json 的档位里改。
-
-⚠️ 下面这两条**是 DeepSeek 特有的**，换成别家就不一定成立 ——
-   比如别的服务商可能认 `temperature`，思考强度也可能真有好几档。
-   它们不是这个程序的限制，是那家 API 的行为。
-
-═══════════════════════════════════════════════════════════════
-  两个 DeepSeek 的坑（官方文档明确写了，不是我的推测）
-═══════════════════════════════════════════════════════════════
-
-坑一：思考模式下 temperature 无效
-
-    "思考模式不支持 temperature、presence_penalty、frequency_penalty
-     参数。请注意，为了兼容已有软件，设置参数不会报错，但也不会生效。"
-
-    → 所以你的档位里 temperature 只在「省电」档（关闭思考）真正起作用。
-      其余档位它会被静默忽略。这是 DeepSeek 的设计，不是 bug。
-
-坑二：思考强度是漏斗形的
-
-    请求传入        实际生效
-    ─────────      ────────
-    minimal    →   low
-    low        →   low
-    medium     →   high      ← 注意
-    high       →   high
-    xhigh      →   high
-    max        →   max
-    ultra      →   max
-
-    → 五档预设里「认真(medium)」和「深究(high)」会落到同一档。
-      要真正拉开差距，得改档位的 effort 值，或者接受这个现实。
-
-另外：思考模式下 top_p 下限被抬到 0.95；非思考模式恒为 1.0。
-
-═══════════════════════════════════════════════════════════════
-  配置
-═══════════════════════════════════════════════════════════════
-
-API key 放在 data/secrets.json：
-
-    { "deepseek_api_key": "sk-xxxxxxxx" }
-
-也可以走环境变量 DEEPSEEK_API_KEY（优先级更高）。
-secrets.json 不在备份范围内，这是故意的。
-
-═══════════════════════════════════════════════════════════════
-  用法
-═══════════════════════════════════════════════════════════════
-
-    python src/brain.py check              # 验证 key 能用
-    python src/brain.py ask "在吗"          # 问一句
-    python src/brain.py ask "帮我分析…" --level deep
-    python src/brain.py chat               # 命令行对话
+进阶命令：check（真实API省电档检查）、ask、chat。
+请使用项目解释器；完整用法与验证边界见docs/命令行参考.md。
 """
 
 from __future__ import annotations
@@ -132,7 +62,7 @@ SECRETS = M.ROOT / "data" / "secrets.json"
 DEFAULT_BASE = "https://api.deepseek.com"
 
 # 档位 effort → DeepSeek 实际接受的 reasoning_effort。
-# 官方映射表见文件头。medium 会被映射到 high，这里直接写清楚，
+# 当前适配中 medium 会被映射到 high，这里直接写清楚，
 # 免得你以为 medium 真的比 low 强一档。
 EFFORT_MAP = {
     "none": None,       # None = 关闭思考模式
@@ -173,13 +103,8 @@ def api_model(name: str) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 def load_secrets() -> dict:
-    d = {}
-    if SECRETS.exists():
-        try:
-            d = json.loads(SECRETS.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            pass
-    return d
+    from bootstrap import read_object
+    return read_object(SECRETS) if SECRETS.exists() else {}
 
 
 def api_key() -> str:
@@ -371,7 +296,7 @@ def _stream(query: str, history: list[dict] | None = None,
     """
     key = api_key()
     if not key:
-        yield ("error", "没有 API key。运行：python src/brain.py setkey sk-xxxx")
+        yield ("error", "还没有配置 API key。Windows 请双击项目里的「配置API.bat」，在 data/secrets.json 的 deepseek_api_key 双引号内填写并保存，再重新发送。其他系统直接编辑这个文件。")
         return
 
     # ★ 工具黑名单。QQ 那条路用它挡住 see_image —— 那个工具会把整个文件
@@ -607,10 +532,10 @@ def check() -> bool:
     if not key:
         print("✗ 没有 API key")
         print(f"  放到 {SECRETS}：{{\"deepseek_api_key\": \"sk-xxxx\"}}")
-        print("  或运行：python src/brain.py setkey sk-xxxx")
+        print("  Windows 请双击「配置API.bat」，填写 data/secrets.json 后保存。")
         return False
 
-    print(f"✓ 读到 key：{key[:8]}…{key[-4:]}（共 {len(key)} 字符）")
+    print("✓ 已读到 API key（不显示内容）")
     print(f"  base_url：{base_url()}")
     print("  正在测试连通性…")
 

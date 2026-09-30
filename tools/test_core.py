@@ -1,7 +1,8 @@
 """Run regression tests in a disposable copy containing only public fixtures.
 
 Usage: python tools/test_core.py [test_module ...]
-The child process cannot open network connections. No runtime data, credentials,
+Common Python socket connection paths are blocked in the child process. This is
+not an OS-level network sandbox. No runtime data, credentials,
 persona or memory from the working installation are copied into the test tree.
 """
 from __future__ import annotations
@@ -26,11 +27,11 @@ def main() -> int:
             shutil.copytree(PROJECT / directory, root / directory,
                             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         (root / "data").mkdir()
-        for filename in ("config.example.json", "thinking.json"):
+        for filename in ("config.example.json", "thinking.example.json", "secrets.example.json"):
             shutil.copyfile(PROJECT / "data" / filename, root / "data" / filename)
         shutil.copyfile(PROJECT / "VERSION", root / "VERSION")
         env = dict(os.environ)
-        for key in ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "AIPET_HOME"):
+        for key in ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "AIPET_HOME"):
             env.pop(key, None)
         env.update(QT_QPA_PLATFORM="offscreen", PYTHONIOENCODING="utf-8",
                    AIPET_TEST_WORK=str(root / "work"), AIPET_HOME=str(root))
@@ -39,6 +40,8 @@ import socket, sys, unittest
 def offline(*args, **kwargs):
     raise RuntimeError('Network access is disabled in regression tests')
 socket.socket.connect = offline
+socket.socket.connect_ex = offline
+socket.create_connection = offline
 sys.path[:0] = ['tests', 'src']
 loader = unittest.TestLoader()
 suite = (loader.loadTestsFromNames(sys.argv[1:]) if sys.argv[1:]

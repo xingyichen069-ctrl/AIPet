@@ -49,7 +49,7 @@ def plan(root):
     thinking = root / 'data/thinking.json'
     if thinking.exists():
         cfg = json.loads(thinking.read_text(encoding='utf-8'))
-        defaults = json.loads((PROJECT / 'data/thinking.json').read_text(encoding='utf-8'))
+        defaults = json.loads((PROJECT / 'data/thinking.example.json').read_text(encoding='utf-8'))
         for level, keys in [('daily', ('reasoning_effort','temperature','frequency_penalty','verbosity','tools')),
                             ('serious', ('verbosity',))]:
             params = cfg.setdefault('presets', {}).setdefault(level, {}).setdefault('params', {})

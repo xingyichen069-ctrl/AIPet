@@ -1,5 +1,6 @@
 # Local runtime and personal data remain on disk, outside code history.
 .venv/
+.python/
 runtime/
 venv/
 __pycache__/
@@ -8,7 +9,8 @@ __pycache__/
 .env
 .env.*
 data/*
-!data/thinking.json
+!data/thinking.example.json
+!data/secrets.example.json
 !data/config.example.json
 persona/
 memory/

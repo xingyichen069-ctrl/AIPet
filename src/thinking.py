@@ -1,44 +1,9 @@
 #!/usr/bin/env python3
-"""
-thinking.py —— 思考强度引擎
+"""思考档位与每轮参数快照。
 
-桌面上那个控制面板背后就是它。一个滑块，五档强度。
-
-═══════════════════════════════════════════════════════════════
-  它到底控制什么
-═══════════════════════════════════════════════════════════════
-
-不是装样子。换档会真实改变六个维度：
-
-  1. 推理投入      reasoning_effort: none → low → medium → high → max
-  2. 回复长度      max_tokens: 300 → 800 → 2000 → 4000 → 8000
-  3. 记忆深度      memory_budget: 350 → 9000 tokens（25 倍差距）
-                   ↑ 这一条最关键：档位越高，它能想起的事越多
-  4. 检索行为      search: off → on_demand → eager → always
-  5. 是否自检      self_check: 回答前要不要回头验一遍
-  6. 说话篇幅      verbosity: 从"一句话"到"尽可能完整"
-
-第 3 条把思考强度和记忆系统接在了一起——
-调到「深究」时，它不只是想得更久，是**真的会去翻更多的旧账**。
-
-═══════════════════════════════════════════════════════════════
-  自动模式
-═══════════════════════════════════════════════════════════════
-
-默认是 auto：按问题本身判断该用哪档。
-"在吗" → 省电；"帮我分析一下这个架构的权衡" → 深究。
-
-判断规则在 data/thinking.json 的 auto_rules 里，可以自己调权重。
-
-═══════════════════════════════════════════════════════════════
-
-用法：
-    python src/thinking.py                      # 看当前档位
-    python src/thinking.py set deep             # 切档
-    python src/thinking.py auto "帮我分析这个设计"  # 看自动模式会判成什么
-    python src/thinking.py params               # 看解析后的具体参数
-    python src/thinking.py prompt "问题"         # 输出给 LLM 的系统提示块
-    python src/thinking.py list                 # 列出所有档位
+六个手动档位：frugal/daily/serious/deep/max/thunder，另有auto。
+新装默认max；私人配置在data/thinking.json，发行模板为thinking.example.json。
+当前参数与限制见docs/思考强度配置手册.md。
 """
 
 from __future__ import annotations
@@ -68,13 +33,16 @@ _cache: dict = {"mtime": 0, "data": None}
 
 def load(force: bool = False) -> dict:
     """带 mtime 缓存的重载——面板改完文件，agent 这边自动跟上。"""
+    if not THINKING_FILE.exists():
+        from bootstrap import initialize
+        initialize(THINKING_FILE.parent.parent)
     try:
         mtime = THINKING_FILE.stat().st_mtime
     except OSError:
         return {"current": "daily", "presets": {}, "auto_rules": {}}
 
     if force or mtime != _cache["mtime"] or _cache["data"] is None:
-        with open(THINKING_FILE, encoding="utf-8") as f:
+        with open(THINKING_FILE, encoding="utf-8-sig") as f:
             _cache["data"] = json.load(f)
         _cache["mtime"] = mtime
     return _cache["data"]

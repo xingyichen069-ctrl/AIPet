@@ -6,14 +6,10 @@ migrate.py —— 换新装的时候，把私人内容搬过去
   什么时候需要它
 ═══════════════════════════════════════════════════════════════
 
-**先说清楚：直接把新版的 zip 解压到旧目录上覆盖，什么都不会丢。**
-仓库里的 zip 根本不含 `persona/` `memory/` `data/`（都在 .gitignore 里），
-而解压不会删掉压缩包里没有的文件。那条路不用这个脚本。
-
-需要它的是另一种换法：**解压到一个新目录，然后把旧的整个丢掉**。
-那时候人格、记忆、密钥、信道绑定全在新目录里没有，得搬。
-
-上一次（v0.3.1 → v0.4.0）是手工搬的，这次写成脚本。
+推荐把新版解压到新目录，复制私人资料，检查后使用；旧目录保留供回退。
+不要用直接覆盖安装来代替备份，尤其旧版本曾跟踪用户档位配置。
+新手请双击 迁移私人内容.bat：选旧目录、查看清单、确认后复制。
+本文件仍提供高级命令行入口，QQ 进程控制行为本轮未修改。
 
 ═══════════════════════════════════════════════════════════════
   它搬什么、不搬什么
@@ -50,6 +46,12 @@ migrate.py —— 换新装的时候，把私人内容搬过去
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
+import hashlib
+import json
+import sqlite3
+import tempfile
+import uuid
 import os
 import re
 import shutil
@@ -57,6 +59,9 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+import bootstrap
 
 if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("-", "") != "utf8":
     try:
@@ -85,10 +90,13 @@ ITEMS: list[tuple[str, str, str]] = [
     #   data/cache/ 底下，所以「缓存不搬」那条盖不住它 —— 是真丢了。
     ("data/qq_media/**/*",        "媒体",   "QQ 收到的图片和文件"),
     ("data/config.json",          "配置",   "搜索后端、代理、沙箱根、隐私黑名单"),
-    ("data/thinking.json",        "配置",   "五档预设 + 自动判定规则"),
+    ("data/thinking.json",        "配置",   "私人档位、模型设置 + 自动判定规则"),
     ("data/appearance.json",      "外观",   "主题、字号、玻璃质感"),
     ("data/desktop_ui.json",      "外观",   "话题草稿、附件快照、窗口布局"),
     ("data/pet_state.json",       "外观",   "桌宠位置、穿透、置顶"),
+    ("data/persona_moods.json",   "心理点", "每个人格使用的情绪方案"),
+    ("data/moods/**/*",           "心理点", "各角色的情绪状态与冷却"),
+    ("data/mood_catalog.json",    "心理点", "旧安装自定义情绪文案"),
     ("data/mood.json",            "心理点", "她此刻停在哪"),
     ("data/mood_log.jsonl",       "心理点", "每轮记的那一笔"),
     ("data/companion.sqlite3",    "陪伴",   "约定、安静陪伴、话题"),
@@ -160,6 +168,8 @@ def plan(source: Path, target: Path, with_backups: bool = True):
     for p, kind, note in files:
         rel = p.relative_to(source)
         dst = target / rel
+        if not p.resolve().is_relative_to(source.resolve()) or not dst.resolve().is_relative_to(target.resolve()):
+            raise ValueError(f"路径经链接指向安装目录外，不能自动迁移：{rel}")
         rows.append({
             "src": p, "rel": rel, "dst": dst, "kind": kind, "note": note,
             "exists": dst.exists(),
@@ -170,7 +180,9 @@ def plan(source: Path, target: Path, with_backups: bool = True):
 
 def footprint(target: Path) -> list[str]:
     """目标里已有的私人痕迹。空列表 = 干净的。"""
-    return [rel for rel in FOOTPRINT if (target / rel).exists()]
+    files, _ = collect(target, with_backups=False)
+    return [str(p.relative_to(target)) for p, _, _ in files
+            if not bootstrap.is_unedited_template(target, p.relative_to(target).as_posix())]
 
 
 def stamp() -> str:
@@ -205,27 +217,87 @@ def copy_runtime(rows: list[dict]) -> int:
     return len(rows)
 
 
+def _digest(path: Path) -> str:
+    result = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            result.update(block)
+    return result.hexdigest()
+
+
+def _snapshot(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.name == "companion.sqlite3":
+        with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)) as old:
+            with closing(sqlite3.connect(destination)) as new:
+                old.backup(new)
+                if new.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                    raise ValueError("陪伴数据库检查未通过，请保留旧目录。")
+    else:
+        before = _digest(source)
+        shutil.copy2(source, destination)
+        if _digest(destination) != before or _digest(source) != before:
+            raise ValueError(f"复制时文件发生变化或校验失败：{source.name}。请先退出旧程序。")
+
+
 def apply(rows, target: Path) -> tuple[int, int, Path | None]:
-    """
-    真搬。返回 (搬了几个, 覆盖了几个, 备份目录)。
+    """Stage and verify all files, then replace with a recoverable manifest.
 
-    覆盖前先把目标里那份存到 backups/迁移前-<时间>/ —— 搬错了能翻回来。
+    Only this transaction's new files are removed on rollback. The source is
+    always read-only. SQLite uses its snapshot API so WAL content is retained.
     """
-    over = [r for r in rows if r["exists"]]
-    backup_dir = None
-    if over:
-        backup_dir = target / "backups" / f"迁移前-{stamp()}"
-        for r in over:
-            dst_backup = backup_dir / r["rel"]
-            dst_backup.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(r["dst"], dst_backup)
-
-    copied = 0
-    for r in rows:
-        r["dst"].parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(r["src"], r["dst"])
-        copied += 1
-    return copied, len(over), backup_dir
+    target = target.resolve()
+    for row in rows:
+        if not row["dst"].resolve().is_relative_to(target):
+            raise ValueError(f"目标路径位于安装外：{row['rel']}")
+    work = target / "work"
+    if not work.resolve().is_relative_to(target) or not (target / "backups").resolve().is_relative_to(target):
+        raise ValueError("work 或 backups 指向安装目录外，不能自动迁移。")
+    work.mkdir(exist_ok=True)
+    backup_dir = target / "backups" / f"迁移前-{stamp()}-{uuid.uuid4().hex[:8]}"
+    committed = []
+    manifest = {"status": "staging", "files": []}
+    with tempfile.TemporaryDirectory(prefix="migration-", dir=work) as temporary:
+        stage = Path(temporary)
+        for row in rows:
+            _snapshot(row["src"], stage / row["rel"])
+            if row["rel"].as_posix() in ("data/config.json", "data/thinking.json", "data/secrets.json"):
+                bootstrap.read_object(stage / row["rel"])
+        backup_dir.mkdir(parents=True)
+        # Save every overwritten file before making any change.
+        for row in rows:
+            exists = row["dst"].exists()
+            if exists:
+                _snapshot(row["dst"], backup_dir / row["rel"])
+            manifest["files"].append({"path": row["rel"].as_posix(), "existed": exists})
+        def record(status):
+            manifest["status"] = status
+            (backup_dir / "manifest.json").write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        record("ready")
+        try:
+            for row, item in zip(rows, manifest["files"]):
+                destination = row["dst"]
+                if not destination.resolve().is_relative_to(target):
+                    raise ValueError(f"迁移期间目标路径改变：{row['rel']}")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(stage / row["rel"], destination)
+                committed.append((row, item))
+            record("complete")
+        except Exception as exc:
+            rollback_errors = []
+            for row, item in reversed(committed):
+                try:
+                    if item["existed"]:
+                        shutil.copy2(backup_dir / row["rel"], row["dst"])
+                    else:
+                        row["dst"].unlink(missing_ok=True)
+                except OSError:
+                    rollback_errors.append(item["path"])
+            record("rollback-incomplete" if rollback_errors else "rolled-back")
+            detail = "部分回退失败，请按 manifest.json 恢复" if rollback_errors else "本次写入已回退"
+            raise RuntimeError(f"迁移中断，{detail}。旧目录未改动；记录保存在 {backup_dir}") from exc
+    return len(rows), sum(item["existed"] for item in manifest["files"]), backup_dir
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -551,10 +623,9 @@ def main() -> None:
   先只看清单不搬，加 --dry-run。
 
   ★ 如果你是直接把新版 zip 解压覆盖旧目录 ——
-    那不需要这个脚本，什么都不会丢。仓库的 zip 根本不含
-    persona/ memory/ data/（都在 .gitignore 里），解压也不会
-    删掉压缩包里没有的文件。
-    需要它的是另一种换法：解压到新目录，然后把旧的整个丢掉。""")
+    不建议直接覆盖。旧发行包含有可覆盖用户设置的文件，
+    自定义主题和立绘也可能被替换。请保留旧目录，
+    新版解压到新目录后使用双击迁移入口。""")
             sys.exit(2)
 
     source = Path(args.source).expanduser().resolve()
@@ -684,7 +755,7 @@ def main() -> None:
     steps.append("确认 data\\secrets.json 在，再启动桌宠")
     if bridge:
         steps.append("在新目录双击 启动QQ.bat —— 旧的那条刚被停掉，QQ 现在没接上")
-    steps.append("旧目录先别删，跑顺了再删")
+    steps.append("保留旧目录供回退，确认新目录的人格、历史和对话正常")
 
     print("\n  接下来：")
     for i, s in enumerate(steps, 1):

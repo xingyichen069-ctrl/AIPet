@@ -84,7 +84,7 @@ DEFAULT_QUESTION = (
 
 def load_secrets() -> dict:
     try:
-        return json.loads(SECRETS.read_text(encoding="utf-8"))
+        return json.loads(SECRETS.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
         return {}
 

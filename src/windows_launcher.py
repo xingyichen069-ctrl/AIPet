@@ -17,6 +17,11 @@ def main():
         sys.stdout = sys.stderr = log
         try:
             print('\n[启动]', datetime.now().isoformat(timespec='seconds'))
+            import bootstrap
+            bootstrap.initialize(root)
+            errors = bootstrap.validate(root)
+            if errors:
+                raise bootstrap.ConfigError('\n'.join(errors))
             sys.argv = [str(root / 'src' / 'pet.py'), '--show-chat']
             runpy.run_path(sys.argv[0], run_name='__main__')
         except SystemExit:

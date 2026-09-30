@@ -1,5 +1,5 @@
 {
-  "_说明": "思考强度配置。面板上的选项和这里一一对应。改完保存，面板会自动重载。",
+  "_说明": "六档与自动模式的公开模板，新装默认max。私人选择保存于thinking.json；已有文件不会被准备环境覆盖。",
   "_手册": "详细调参说明见 docs/思考强度配置手册.md",
   "current": "max",
   "_current": "auto | frugal | daily | serious | deep | max | thunder",
@@ -97,7 +97,7 @@
       "name": "日常",
       "icon": "◔",
       "color": "#5eead4",
-      "summary": "默认档",
+      "summary": "日常交流",
       "feels_like": "正常聊天，不使劲也不敷衍。",
       "when": "绝大多数日常对话。不知道选哪个就用这个",
       "params": {

@@ -1,9 +1,9 @@
 {
-  "_说明": "小日和的配置。改完保存即生效，不用重启。",
+  "_说明": "小日和配置。首次只复制到本机config.json；搜索、隐私词、检索等修改后请退出并重启。外观、人格、档位另有重载机制。",
   "retrieval": {
     "_说明": "检索参数 —— 每次对话时，从记忆库里挑多少内容注入 prompt",
     "token_budget": 1200,
-    "_token_budget": "记忆注入的硬上限。超了就按分数截断，防止 prompt 无限膨胀",
+    "_token_budget": "记忆检索配置预算。当前部分兜底条目可能超出预算，尚不能作为严格上限。",
     "max_entries": 12,
     "_max_entries": "最多注入几条记忆",
     "recency_floor": 4,
@@ -47,11 +47,11 @@
     }
   },
   "compression": {
-    "_说明": "分层压缩 —— 老记忆不是删除，是降采样",
+    "_说明": "手动压缩设置。原文可归档，但摘要/归档尚未接回对话检索，不建议新手为维护而执行压缩。",
     "daily_to_weekly_after_days": 30,
     "_daily_to_weekly": "超过30天的日记条目 → 压成周摘要",
     "weekly_to_monthly_after_days": 180,
-    "_weekly_to_monthly": "超过180天的周摘要 → 压成月摘要",
+    "_weekly_to_monthly": "预留的180天月摘要阈值；当前实现尚未生成月摘要。",
     "archive_originals": true,
     "_archive_originals": "原始条目移到 archive/ 而不是删除，你随时能翻"
   },
@@ -95,9 +95,9 @@
     }
   },
   "knowledge": {
-    "_说明": "本地知识库。详见 src/knowledge.py 顶部说明——多数情况下你不需要它。",
+    "_说明": "独立命令行知识库索引，尚未接入普通对话。",
     "enabled": false,
-    "_enabled": "默认关闭。等你确实有一批要反复查的私有资料时再打开",
+    "_enabled": "用于独立知识库功能；打开不会让桌面对话自动读取索引。",
     "docs_dir": "knowledge",
     "_docs_dir": "放资料的文件夹（相对 AIPet 根目录）",
     "chunk_size": 600,

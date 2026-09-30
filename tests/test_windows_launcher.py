@@ -1,4 +1,6 @@
 import sys
+import shutil
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -12,6 +14,10 @@ class WindowsLauncher(unittest.TestCase):
 
     def test_gui_launch_logs_failures_and_restores_streams(self):
         original = sys.stdout, sys.stderr
+        project = Path(__file__).resolve().parents[1]
+        for kind in ("config", "thinking", "secrets"):
+            shutil.copyfile(project / "data" / f"{kind}.example.json",
+                            self.root / "data" / f"{kind}.example.json")
         with patch.object(W, '__file__', str(self.root / 'src' / 'windows_launcher.py')), \
              patch.object(W.sys, 'argv', ['windows_launcher.py']), \
              patch.object(W.sys, 'platform', 'test'), \
