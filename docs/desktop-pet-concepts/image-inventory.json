@@ -1,0 +1,436 @@
+[
+  {
+    "job": "hiyori-base",
+    "file": "originals/hiyori-base-v1.png",
+    "size": [
+      1060,
+      1484
+    ],
+    "mode": "RGBA",
+    "alpha_extrema": [
+      0,
+      255
+    ],
+    "visible_bbox": [
+      129,
+      96,
+      935,
+      1423
+    ],
+    "sha256": "722f1c250fade580bb53e3a7e9d626b33d87af0b024aabc93aa2ae0589ee3ab0",
+    "review": {
+      "status": "reviewed",
+      "selected": true,
+      "notes": "已看原图：灰棕双马尾、暗红发带、蓝领结、奶油开衫和完整鞋袜保留。头大身短，双手可见。作为本轮待选画风基准，不代表用户已经定稿。"
+    },
+    "provider": "authorized compatible image service",
+    "requested_model": "gpt-image-2",
+    "requested_size": "1024x1024",
+    "quality": "medium",
+    "method": "imagegen skill CLI edit",
+    "user_approved_final_design": false
+  },
+  {
+    "job": "hiyori-activity",
+    "file": "originals/hiyori-activity-v1.png",
+    "size": [
+      1060,
+      1484
+    ],
+    "mode": "RGBA",
+    "alpha_extrema": [
+      0,
+      255
+    ],
+    "visible_bbox": [
+      103,
+      113,
+      979,
+      1401
+    ],
+    "sha256": "fdadd69febd1861a81a9a1686c4ef1c3209597920a0b1901da727a8b55d10919",
+    "review": {
+      "status": "reviewed",
+      "selected": true,
+      "notes": "已与基础稿比对：双马尾、红发带、蓝领结和开衫的配色及主体结构保留；坐姿双脚、双手和杯子清楚，没有桌子遮挡。与基础稿有正常姿态带来的细节变化，未作为可插值动画帧。"
+    },
+    "provider": "authorized compatible image service",
+    "requested_model": "gpt-image-2",
+    "requested_size": "1024x1024",
+    "quality": "medium",
+    "method": "imagegen skill CLI edit",
+    "user_approved_final_design": false
+  },
+  {
+    "job": "reimu-base",
+    "file": "originals/reimu-base-v1.png",
+    "size": [
+      1060,
+      1484
+    ],
+    "mode": "RGBA",
+    "alpha_extrema": [
+      0,
+      255
+    ],
+    "visible_bbox": [
+      119,
+      43,
+      959,
+      1430
+    ],
+    "sha256": "f3ba7b13bf5e5014081225880098c1c391f7bd0c0fea55a2994fd258352f5899",
+    "review": {
+      "status": "reviewed",
+      "selected": true,
+      "notes": "已看原图：红白大蝴蝶结、深棕长发、红白巫女服与分离袖清楚，手脚完整；与小日和配色、衣服及发饰有区别。"
+    },
+    "provider": "authorized compatible image service",
+    "requested_model": "gpt-image-2",
+    "requested_size": "1024x1024",
+    "quality": "medium",
+    "method": "imagegen skill CLI edit",
+    "user_approved_final_design": false
+  },
+  {
+    "job": "reimu-activity",
+    "file": "originals/reimu-activity-v1.png",
+    "size": [
+      1060,
+      1484
+    ],
+    "mode": "RGBA",
+    "alpha_extrema": [
+      0,
+      255
+    ],
+    "visible_bbox": [
+      102,
+      45,
+      986,
+      1368
+    ],
+    "sha256": "55e2d1e77a6a01c8b3f8fddcc664d8a60dd405ca97e9345bcc4faa8e56f35c16",
+    "review": {
+      "status": "reviewed",
+      "selected": true,
+      "notes": "已与基础稿比对：蝴蝶结、头发、分离袖、红白衣裙和鞋袜保留；侧坐抱茶杯，神态稍放松，手脚完整。"
+    },
+    "provider": "authorized compatible image service",
+    "requested_model": "gpt-image-2",
+    "requested_size": "1024x1024",
+    "quality": "medium",
+    "method": "imagegen skill CLI edit",
+    "user_approved_final_design": false
+  },
+  {
+    "job": "marisa-base",
+    "file": "originals/marisa-base-v1.png",
+    "size": [
+      1060,
+      1484
+    ],
+    "mode": "RGBA",
+    "alpha_extrema": [
+      0,
+      255
+    ],
+    "visible_bbox": [
+      88,
+      24,
+      998,
+      1451
+    ],
+    "sha256": "748c37d45a5d48fdd03e507c9858ec8deb1fcbdd3fae272863edad5888b7396d",
+    "review": {
+      "status": "reviewed",
+      "selected": true,
+      "notes": "已看原图：黑尖帽大白蝴蝶结、金发侧小辫、黑白裙与围裙、短靴齐全；帽子未出框。"
+    },
+    "provider": "authorized compatible image service",
+    "requested_model": "gpt-image-2",
+    "requested_size": "1024x1024",
+    "quality": "medium",
+    "method": "imagegen skill CLI edit",
+    "user_approved_final_design": false
+  },
+  {
+    "job": "marisa-activity",
+    "file": "originals/marisa-activity-v1.png",
+    "size": [
+      1060,
+      1484
+    ],
+    "mode": "RGBA",
+    "alpha_extrema": [
+      0,
+      255
+    ],
+    "visible_bbox": [
+      19,
+      26,
+      1041,
+      1410
+    ],
+    "sha256": "080a0f881d2af0323fdfeece1d0733668a5cb339702bb033a04847938121ece0",
+    "review": {
+      "status": "reviewed",
+      "selected": true,
+      "notes": "已与基础稿比对：帽子、金发小辫、围裙与短靴保持，侧坐扫帚、握柄和招手关系清楚，全身和扫帚均在画内；扫帚使横向占地增加，可在日常站姿收起。"
+    },
+    "provider": "authorized compatible image service",
+    "requested_model": "gpt-image-2",
+    "requested_size": "1024x1024",
+    "quality": "medium",
+    "method": "imagegen skill CLI edit",
+    "user_approved_final_design": false
+  },
+  {
+    "job": "cirno-base",
+    "file": "originals/cirno-base-v1.png",
+    "size": [
+      1060,
+      1484
+    ],
+    "mode": "RGBA",
+    "alpha_extrema": [
+      0,
+      255
+    ],
+    "visible_bbox": [
+      75,
+      37,
+      987,
+      1437
+    ],
+    "sha256": "e34699e549fb1a677dd37e763a5b8eef03b71f7d9dec67712f5385406d016d9f",
+    "review": {
+      "status": "reviewed",
+      "selected": true,
+      "notes": "已看原图：蓝短发蓝蝴蝶结、蓝裙白衫红领结一致；背部左右各三片冰翼，共六片；全身完整。"
+    },
+    "provider": "authorized compatible image service",
+    "requested_model": "gpt-image-2",
+    "requested_size": "1024x1024",
+    "quality": "medium",
+    "method": "imagegen skill CLI edit",
+    "user_approved_final_design": false
+  },
+  {
+    "job": "cirno-activity",
+    "file": "originals/cirno-activity-v1.png",
+    "size": [
+      1060,
+      1484
+    ],
+    "mode": "RGBA",
+    "alpha_extrema": [
+      0,
+      255
+    ],
+    "visible_bbox": [
+      90,
+      21,
+      990,
+      1445
+    ],
+    "sha256": "8d69ac22c1c85bd07662020e5922d01baf418700552fe79178d69769ae9b2107",
+    "review": {
+      "status": "reviewed",
+      "selected": true,
+      "notes": "已与基础稿比对：发型、蓝白红服装保留，仍为左右各三片共六片冰翼；抬膝、托雪花、另一手叉腰可读，没有附加角色或大量背景。"
+    },
+    "provider": "authorized compatible image service",
+    "requested_model": "gpt-image-2",
+    "requested_size": "1024x1024",
+    "quality": "medium",
+    "method": "imagegen skill CLI edit",
+    "user_approved_final_design": false
+  },
+  {
+    "job": "satori-base",
+    "file": "originals/satori-base-v1.png",
+    "size": [
+      1060,
+      1484
+    ],
+    "mode": "RGBA",
+    "alpha_extrema": [
+      0,
+      255
+    ],
+    "visible_bbox": [
+      131,
+      71,
+      937,
+      1426
+    ],
+    "sha256": "b8c5f79e67301c829c44e2e6bc63a4a94f06dc8707a13214809d1aac4903e1cf",
+    "review": {
+      "status": "reviewed",
+      "selected": true,
+      "notes": "已看原图：粉紫短发、蓝衣粉裙，第三眼在胸前且睁开。线管较多但轮廓完整，可在用户定稿时进一步简化。"
+    },
+    "provider": "authorized compatible image service",
+    "requested_model": "gpt-image-2",
+    "requested_size": "1024x1024",
+    "quality": "medium",
+    "method": "imagegen skill CLI edit",
+    "user_approved_final_design": false
+  },
+  {
+    "job": "satori-activity",
+    "file": "originals/satori-activity-v1.png",
+    "size": [
+      1060,
+      1484
+    ],
+    "mode": "RGBA",
+    "alpha_extrema": [
+      0,
+      255
+    ],
+    "visible_bbox": [
+      126,
+      59,
+      946,
+      1425
+    ],
+    "sha256": "f5958b5f0255c052864fca630b1942cbe7ba5b596d4526329112ac87783c92f0",
+    "review": {
+      "status": "reviewed",
+      "selected": true,
+      "notes": "已与基础稿比对：粉紫发、蓝衣粉裙、胸前睁开的第三眼和线管保留；书在眼器官下方，两手握书、脚清楚可见。实际是抱书阅读姿态，后续绑定可再加低头看页动作。"
+    },
+    "provider": "authorized compatible image service",
+    "requested_model": "gpt-image-2",
+    "requested_size": "1024x1024",
+    "quality": "medium",
+    "method": "imagegen skill CLI edit",
+    "user_approved_final_design": false
+  },
+  {
+    "job": "koishi-base",
+    "file": "originals/koishi-base-v1.png",
+    "size": [
+      1060,
+      1484
+    ],
+    "mode": "RGBA",
+    "alpha_extrema": [
+      0,
+      255
+    ],
+    "visible_bbox": [
+      91,
+      92,
+      980,
+      1424
+    ],
+    "sha256": "73097b8f42fcba33113f12c7d1ee09be2876fac977284506201d19be45e0d2a9",
+    "review": {
+      "status": "reviewed",
+      "selected": true,
+      "notes": "已看原图：黑帽黄带、浅灰绿发、黄衣绿裙，第三眼在胸前闭合，无额外睁眼。线管已做简化；全身完整。"
+    },
+    "provider": "authorized compatible image service",
+    "requested_model": "gpt-image-2",
+    "requested_size": "1024x1024",
+    "quality": "medium",
+    "method": "imagegen skill CLI edit",
+    "user_approved_final_design": false
+  },
+  {
+    "job": "koishi-activity",
+    "file": "originals/koishi-activity-v1.png",
+    "size": [
+      1060,
+      1484
+    ],
+    "mode": "RGBA",
+    "alpha_extrema": [
+      0,
+      255
+    ],
+    "visible_bbox": [
+      117,
+      74,
+      979,
+      1433
+    ],
+    "sha256": "11dfc5d4dfc8cea8f474d15ab669803988459f2364f2c171e358ed77db7d5d2b",
+    "review": {
+      "status": "reviewed",
+      "selected": true,
+      "notes": "已与基础稿比对：帽子、发色、黄绿衣裙与闭合第三眼保持；一手扶帽一手拿花，身体轻倾，单脚稍抬。和觉的第三眼状态没有混淆。"
+    },
+    "provider": "authorized compatible image service",
+    "requested_model": "gpt-image-2",
+    "requested_size": "1024x1024",
+    "quality": "medium",
+    "method": "imagegen skill CLI edit",
+    "user_approved_final_design": false
+  },
+  {
+    "job": "flandre-base",
+    "file": "originals/flandre-base-v1.png",
+    "size": [
+      1060,
+      1484
+    ],
+    "mode": "RGBA",
+    "alpha_extrema": [
+      0,
+      255
+    ],
+    "visible_bbox": [
+      56,
+      83,
+      1010,
+      1427
+    ],
+    "sha256": "f705586595249bf8a5517085f32892ed91138fd95006947488ddb65597653a19",
+    "review": {
+      "status": "reviewed",
+      "selected": true,
+      "notes": "已看原图：金发侧小辫、红眼、白帽红带和红白裙一致，枝状翼和彩色棱晶都在画内。棱晶排列为小尺寸视觉简化，非官方模型逐项复刻。"
+    },
+    "provider": "authorized compatible image service",
+    "requested_model": "gpt-image-2",
+    "requested_size": "1024x1024",
+    "quality": "medium",
+    "method": "imagegen skill CLI edit",
+    "user_approved_final_design": false
+  },
+  {
+    "job": "flandre-activity",
+    "file": "originals/flandre-activity-v1.png",
+    "size": [
+      1060,
+      1484
+    ],
+    "mode": "RGBA",
+    "alpha_extrema": [
+      0,
+      255
+    ],
+    "visible_bbox": [
+      42,
+      120,
+      1020,
+      1245
+    ],
+    "sha256": "3209a87a1f6adc7b6a349f5568a96b5e0d27e3e624db3acee829190f381e5951",
+    "review": {
+      "status": "reviewed",
+      "selected": true,
+      "notes": "已与基础稿比对：金发侧小辫、红眼、白帽红带、红白衣裙和同组枝状棱晶翼保持；坐姿双脚完整、双手参与堆三块积木。主要身份一致，仍是静态原画，需后续清理透明边缘和拆层。"
+    },
+    "provider": "authorized compatible image service",
+    "requested_model": "gpt-image-2",
+    "requested_size": "1024x1024",
+    "quality": "medium",
+    "method": "imagegen skill CLI edit",
+    "user_approved_final_design": false
+  }
+]

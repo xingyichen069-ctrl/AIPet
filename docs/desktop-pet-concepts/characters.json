@@ -1,0 +1,107 @@
+[
+  {
+    "id": "hiyori",
+    "name": "小日和",
+    "full_name": "桃濑日和",
+    "mood": "温和、可靠",
+    "activity_label": "坐着抱杯",
+    "color": "#ad806e",
+    "subject": "Momose Hiyori. Gray-brown compact twin tails tied with muted dark-red ribbons, soft blue-gray-violet eyes, cream cardigan over a navy sailor collar with pale trim, BLUE neck ribbon, navy pleated skirt, dark socks and brown loafers.",
+    "activity": "She sits comfortably with both little feet visible in front, holding a small plain cream mug gently in BOTH hands, a subtle warm smile and slight inward tilt of her head. No steam covering her face. No table, chair or extra furniture.",
+    "anchors": [
+      "灰棕双马尾与暗红发带",
+      "蓝领结、深蓝领口、奶油开衫",
+      "温和神态"
+    ]
+  },
+  {
+    "id": "reimu",
+    "name": "灵梦",
+    "full_name": "博丽灵梦",
+    "mood": "悠闲、干脆",
+    "activity_label": "坐着喝茶",
+    "color": "#cb5857",
+    "subject": "Reimu Hakurei from Touhou. Deep dark-brown long straight hair with readable side locks, warm brown eyes, a large red hair bow with white trim, characteristic red-and-white shrine maiden outfit: red bodice and short red skirt, white collar and a small yellow neck ribbon, detached voluminous white sleeves with red edging. White socks and small dark shoes. Keep bow and hair compact, not wider than the whole body by an enormous amount.",
+    "activity": "She sits casually with legs tucked comfortably to the side and her full feet within frame, holding a small green Japanese tea cup with both hands at chest height. Her half-lidded relaxed expression says she is enjoying a quiet break, slightly wry rather than angry. No table, money, offering box or scenery.",
+    "anchors": [
+      "大红蝴蝶结与深棕发",
+      "红白巫女服、分离袖",
+      "闲适略带懒意"
+    ]
+  },
+  {
+    "id": "marisa",
+    "name": "魔理沙",
+    "full_name": "雾雨魔理沙",
+    "mood": "爽快、好奇",
+    "activity_label": "扫帚上招手",
+    "color": "#b68c38",
+    "subject": "Marisa Kirisame from Touhou. Wavy golden-blonde shoulder-length hair with one small side braid, golden eyes, iconic black pointed witch hat with a large white bow, black-and-white witch dress with a clearly readable white apron and modest white ruffles, small dark ankle boots. Compact hat and short brim that keep the whole design small. Cheerful self-assured little grin.",
+    "activity": "She sits sideways on one small simple straw broom, hovering just barely as a static pose, with both little legs visible on the near side. One hand grips the broom securely and the other gives a confident small wave. Broom is only a little wider than her silhouette; include the entire broom and hat with safe margins. No speed trails, stars, books, furniture or background scene.",
+    "anchors": [
+      "黑尖帽与大白蝴蝶结",
+      "金发、黑白裙与围裙",
+      "爽快自信"
+    ]
+  },
+  {
+    "id": "cirno",
+    "name": "琪露诺",
+    "full_name": "琪露诺",
+    "mood": "明亮、好胜",
+    "activity_label": "托雪花小跳",
+    "color": "#599cc2",
+    "subject": "Cirno from Touhou. Short icy-blue bob hair, lively blue eyes, a large deep-blue hair bow, a blue dress over a white short puff-sleeve blouse, a small red neck ribbon, white trim at the skirt hem, white socks and small dark shoes. Exactly SIX compact ice-crystal wings, three on each side of the back; clean transparent pale-blue geometric crystals clearly belong to her back and do not obscure her body. Proud playful smile.",
+    "activity": "A tiny energetic hop in place: one knee raised, the other small foot pointing gently downward, full body visible. One hand rests on her waist and the other presents one small crisp snowflake above her open palm. A confident delighted expression, eyes open, no text or exaggerated magical effects. Wings keep their six-piece arrangement.",
+    "anchors": [
+      "蓝短发与大蓝蝴蝶结",
+      "蓝裙白衫红领结",
+      "六片冰翼"
+    ]
+  },
+  {
+    "id": "satori",
+    "name": "觉",
+    "full_name": "古明地觉",
+    "mood": "安静、敏锐",
+    "activity_label": "坐着读书",
+    "color": "#a778b0",
+    "subject": "Satori Komeiji from Touhou. Soft pink-lavender short bob hair, calm violet eyes, a simple turquoise-blue blouse with darker trim and small yellow buttons, a short muted pink skirt with a little white frill, light socks and small dark shoes. Her signature OPEN third-eye organ is a small readable reddish eye ornament on the upper chest, with a visible iris and curved red-pink cords looping loosely toward head and wrists; NOT an extra eye on her forehead. Keep cords simple and integrated, no tangled busy loops. A restrained attentive expression.",
+    "activity": "She sits quietly with both feet visible, holding an open small hardcover book in her lap with both hands. Her eyes look gently down toward the book, a subtle knowing smile. The book stays low enough that the OPEN chest third-eye and its connecting cords remain recognizable. Pages have no legible writing. No chair, floor, floating objects or scene.",
+    "anchors": [
+      "粉紫短发、蓝衣粉裙",
+      "第三眼睁开且在胸前",
+      "阅读与克制表情"
+    ]
+  },
+  {
+    "id": "koishi",
+    "name": "恋",
+    "full_name": "古明地恋",
+    "mood": "轻盈、随性",
+    "activity_label": "低头看小花",
+    "color": "#799b67",
+    "subject": "Koishi Komeiji from Touhou. Pale silver-green slightly wavy short hair, clear green eyes, a compact black rounded wide-brim hat with a bright yellow ribbon and bow, mustard-yellow blouse with dark collar and trim, short green skirt, dark socks and small dark shoes. Her signature CLOSED third-eye organ on the chest is a small muted purple-blue oval with a single clearly closed eyelid, and simple dark curved cords loosely loop to wrists and head; do NOT add an open iris or a forehead eye. Light curious smile.",
+    "activity": "She stands with one foot lightly lifted behind the other, tilts her head and torso a little, and looks with gentle spontaneous curiosity at ONE tiny daisy held in her fingertips. Her free hand loosely touches her hat brim. Entire hat and all limbs visible. Keep the CLOSED chest third-eye visible. No floating petals, horror motifs, knife, scene or furniture.",
+    "anchors": [
+      "黑帽黄带、浅灰绿发",
+      "黄衣绿裙",
+      "第三眼保持闭合"
+    ]
+  },
+  {
+    "id": "flandre",
+    "name": "芙兰",
+    "full_name": "芙兰朵露·斯卡蕾特",
+    "mood": "好奇、有主见",
+    "activity_label": "坐着搭积木",
+    "color": "#cf735b",
+    "subject": "Flandre Scarlet from Touhou. Short golden-blonde hair with one small side ponytail, clear ruby-red eyes, a soft white frilled cap with a red ribbon, red vest and short red skirt over a white blouse, a little yellow neck ribbon, white socks and small red shoes. Her iconic slender dark branch-like wings bear small multicolored faceted crystal pendants arranged in a tidy rainbow sequence on each side; compact folded spread, all crystals attached to wing branches. Curious self-possessed small smile, no fangs emphasized and no horror styling.",
+    "activity": "She sits comfortably with her little feet visible and builds a tiny tower of just THREE plain wooden blocks. One hand steadies the base block while the other places the top block. Curious pleased expression with a spark of her own playful logic. Crystal wings remain clearly attached, tidy and fully in frame. No destruction, no scary grin, no blood, no large toy scene or furniture.",
+    "anchors": [
+      "金发侧小辫、红眼",
+      "白帽红带、红白裙",
+      "枝状七彩棱晶翼"
+    ]
+  }
+]

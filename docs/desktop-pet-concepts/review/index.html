@@ -1,0 +1,61 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>七位小住客 · AIPet 原画样例</title>
+<style>
+:root{--bg:#f4f0e7;--card:#fffcf6;--ink:#43372f;--muted:#87776b;--line:#e6ddcf;--accent:#b86d52;--pet-height:180px;color-scheme:light}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:"Microsoft YaHei",system-ui,sans-serif;transition:background .2s}body.dark{--bg:#25262b;--card:#303239;--ink:#f3eee5;--muted:#b7afa5;--line:#4b4d56;color-scheme:dark}main{max-width:1400px;margin:auto;padding:46px 38px 55px}.eyebrow{color:var(--accent);font-size:12px;letter-spacing:2px}h1{font-weight:650;font-size:clamp(28px,3.3vw,47px);line-height:1.3;letter-spacing:-1px;margin:14px 0}header p{color:var(--muted);font-size:15px;line-height:1.9;margin:0;max-width:740px}.toolbar{position:sticky;top:0;z-index:2;background:var(--bg);border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:17px 0;margin:31px 0 24px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}.toolbar label{font-size:13px;display:flex;align-items:center;gap:10px}input[type=range]{width:160px;accent-color:var(--accent)}button,a{font-family:inherit}button{cursor:pointer;color:var(--ink)}.toolbar button,.toolbar a{border:1px solid var(--line);background:var(--card);padding:8px 13px;border-radius:9px;color:var(--ink);font-size:12px;text-decoration:none}.toolbar .spacer{flex:1}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:19px}.card{background:var(--card);border:1px solid var(--line);border-radius:19px;padding:20px 18px 17px;min-width:0}.card-head{display:flex;align-items:center;gap:10px}.dot{display:block;width:7px;height:33px;background:var(--accent);border-radius:5px}h2{margin:0;font-size:20px;font-weight:600}.card-head p{margin:4px 0 0;font-size:12px;color:var(--muted)}.stage{width:100%;height:296px;border:0;background:transparent;display:flex;justify-content:center;align-items:flex-end;padding:15px 0 14px}.stage img{height:var(--pet-height);max-width:100%;object-fit:contain;display:block;transition:height .15s}.poses{display:flex;gap:5px;justify-content:center;flex-wrap:wrap}.poses button{border:1px solid var(--line);border-radius:16px;padding:6px 10px;background:transparent;font-size:12px}.poses .selected{background:var(--ink);border-color:var(--ink);color:var(--card)}.anchors{font-size:11px;color:var(--muted);line-height:1.8;min-height:38px;margin:17px 0 8px}.compare{font-size:11px;color:var(--muted);text-decoration:none}.note-card{display:flex;flex-direction:column;justify-content:center;background:transparent;border:1px dashed var(--line);padding:27px}.note-card h2{font-size:21px;line-height:1.7}.note-card p{font-size:13px;line-height:2;color:var(--muted)}footer{margin-top:31px;color:var(--muted);font-size:12px;line-height:1.9}footer a{color:inherit}dialog{max-width:95vw;max-height:95vh;border:1px solid var(--line);border-radius:18px;background:var(--bg);color:var(--ink);padding:18px}dialog::backdrop{background:#000a}dialog img{display:block;max-height:79vh;max-width:85vw;object-fit:contain;margin:auto}dialog button{border:0;background:var(--card);padding:9px 15px;border-radius:7px;float:right}button:focus-visible,a:focus-visible{outline:3px solid var(--accent);outline-offset:3px}@media(max-width:1050px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:780px){main{padding:27px 20px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.toolbar .spacer{display:none}}@media(max-width:490px){.grid{grid-template-columns:1fr}.stage{height:285px}.toolbar{position:static}header p{font-size:13px}}
+</style></head><body><main><header><div class="eyebrow">AIPET / CHARACTER STUDIES / 01</div><h1>今天，桌面多了七位小住客。</h1><p>有人先泡了茶，有人已经坐上扫帚。选一位看看，也试试缩小以后，还认不认得出她。<br>这组是待挑选的原画样例；形象与人格可以自由搭配。</p></header>
+<div class="toolbar"><label>桌宠高度 <input id="size" type="range" min="120" max="260" value="180" step="1"><output id="size-label">180 px</output></label><button id="all-base">全员站姿</button><button id="all-activity">全员活动</button><span class="spacer"></span><button id="theme" aria-pressed="false">深色桌面</button><a href="seven-personas-overview.png" target="_blank">打开总览 ↗</a></div>
+<section class="grid"><article class="card" style="--accent:#ad806e" data-id="hiyori">
+      <div class="card-head"><span class="dot"></span><div><h2>小日和</h2><p>温和、可靠</p></div></div>
+      <button class="stage" aria-label="查看小日和大图"><img src="art/hiyori-base.png" alt="桃濑日和基础站姿" data-base="art/hiyori-base.png" data-activity="art/hiyori-activity.png"></button>
+      <div class="poses"><button class="selected" data-pose="base" aria-pressed="true">站一会儿</button><button data-pose="activity" aria-pressed="false">坐着抱杯</button></div>
+      <p class="anchors">灰棕双马尾与暗红发带 · 蓝领结、深蓝领口、奶油开衫 · 温和神态</p>
+      <a class="compare" href="hiyori-comparison.png" target="_blank">看两张对照 ↗</a>
+    </article><article class="card" style="--accent:#cb5857" data-id="reimu">
+      <div class="card-head"><span class="dot"></span><div><h2>灵梦</h2><p>悠闲、干脆</p></div></div>
+      <button class="stage" aria-label="查看灵梦大图"><img src="art/reimu-base.png" alt="博丽灵梦基础站姿" data-base="art/reimu-base.png" data-activity="art/reimu-activity.png"></button>
+      <div class="poses"><button class="selected" data-pose="base" aria-pressed="true">站一会儿</button><button data-pose="activity" aria-pressed="false">坐着喝茶</button></div>
+      <p class="anchors">大红蝴蝶结与深棕发 · 红白巫女服、分离袖 · 闲适略带懒意</p>
+      <a class="compare" href="reimu-comparison.png" target="_blank">看两张对照 ↗</a>
+    </article><article class="card" style="--accent:#b68c38" data-id="marisa">
+      <div class="card-head"><span class="dot"></span><div><h2>魔理沙</h2><p>爽快、好奇</p></div></div>
+      <button class="stage" aria-label="查看魔理沙大图"><img src="art/marisa-base.png" alt="雾雨魔理沙基础站姿" data-base="art/marisa-base.png" data-activity="art/marisa-activity.png"></button>
+      <div class="poses"><button class="selected" data-pose="base" aria-pressed="true">站一会儿</button><button data-pose="activity" aria-pressed="false">扫帚上招手</button></div>
+      <p class="anchors">黑尖帽与大白蝴蝶结 · 金发、黑白裙与围裙 · 爽快自信</p>
+      <a class="compare" href="marisa-comparison.png" target="_blank">看两张对照 ↗</a>
+    </article><article class="card" style="--accent:#599cc2" data-id="cirno">
+      <div class="card-head"><span class="dot"></span><div><h2>琪露诺</h2><p>明亮、好胜</p></div></div>
+      <button class="stage" aria-label="查看琪露诺大图"><img src="art/cirno-base.png" alt="琪露诺基础站姿" data-base="art/cirno-base.png" data-activity="art/cirno-activity.png"></button>
+      <div class="poses"><button class="selected" data-pose="base" aria-pressed="true">站一会儿</button><button data-pose="activity" aria-pressed="false">托雪花小跳</button></div>
+      <p class="anchors">蓝短发与大蓝蝴蝶结 · 蓝裙白衫红领结 · 六片冰翼</p>
+      <a class="compare" href="cirno-comparison.png" target="_blank">看两张对照 ↗</a>
+    </article><article class="card" style="--accent:#a778b0" data-id="satori">
+      <div class="card-head"><span class="dot"></span><div><h2>觉</h2><p>安静、敏锐</p></div></div>
+      <button class="stage" aria-label="查看觉大图"><img src="art/satori-base.png" alt="古明地觉基础站姿" data-base="art/satori-base.png" data-activity="art/satori-activity.png"></button>
+      <div class="poses"><button class="selected" data-pose="base" aria-pressed="true">站一会儿</button><button data-pose="activity" aria-pressed="false">坐着读书</button></div>
+      <p class="anchors">粉紫短发、蓝衣粉裙 · 第三眼睁开且在胸前 · 阅读与克制表情</p>
+      <a class="compare" href="satori-comparison.png" target="_blank">看两张对照 ↗</a>
+    </article><article class="card" style="--accent:#799b67" data-id="koishi">
+      <div class="card-head"><span class="dot"></span><div><h2>恋</h2><p>轻盈、随性</p></div></div>
+      <button class="stage" aria-label="查看恋大图"><img src="art/koishi-base.png" alt="古明地恋基础站姿" data-base="art/koishi-base.png" data-activity="art/koishi-activity.png"></button>
+      <div class="poses"><button class="selected" data-pose="base" aria-pressed="true">站一会儿</button><button data-pose="activity" aria-pressed="false">低头看小花</button></div>
+      <p class="anchors">黑帽黄带、浅灰绿发 · 黄衣绿裙 · 第三眼保持闭合</p>
+      <a class="compare" href="koishi-comparison.png" target="_blank">看两张对照 ↗</a>
+    </article><article class="card" style="--accent:#cf735b" data-id="flandre">
+      <div class="card-head"><span class="dot"></span><div><h2>芙兰</h2><p>好奇、有主见</p></div></div>
+      <button class="stage" aria-label="查看芙兰大图"><img src="art/flandre-base.png" alt="芙兰朵露·斯卡蕾特基础站姿" data-base="art/flandre-base.png" data-activity="art/flandre-activity.png"></button>
+      <div class="poses"><button class="selected" data-pose="base" aria-pressed="true">站一会儿</button><button data-pose="activity" aria-pressed="false">坐着搭积木</button></div>
+      <p class="anchors">金发侧小辫、红眼 · 白帽红带、红白裙 · 枝状七彩棱晶翼</p>
+      <a class="compare" href="flandre-comparison.png" target="_blank">看两张对照 ↗</a>
+    </article><aside class="card note-card"><h2>小小一只，<br>各有脾气。</h2><p>站姿保留能走动的小全身；<br>日常姿态增加手、表情和道具。<br>这些图片还不能动。<br>选定外形后，再拆层和绑定。</p><a class="compare" href="size-comparison.png" target="_blank">查看 120 / 180 / 260 像素对照 ↗</a></aside></section>
+<footer>2026.10.01 · 视觉草案分支 · 点击角色查看大图。<br>原图经授权图像接口进行参考图编辑生成；本页仅做透明留白裁切、缩放与排版，保留原图。<br>造型参考：既有桃濑日和模型、用户提供的两段大肥鱼视频；东方角色为同人桌宠视觉探索。<a href="制作记录.md">制作记录</a></footer></main>
+<dialog id="lightbox"><button id="close">关闭 ×</button><img alt="角色原画放大预览"></dialog>
+<script>
+const cards=[...document.querySelectorAll('.card[data-id]')];
+function setPose(card,pose){const im=card.querySelector('img');im.src=im.dataset[pose];im.alt=card.querySelector('h2').textContent+(pose==='base'?'基础站姿':'活动姿态');card.querySelectorAll('[data-pose]').forEach(b=>{const on=b.dataset.pose===pose;b.classList.toggle('selected',on);b.setAttribute('aria-pressed',String(on))})}
+cards.forEach(c=>{c.querySelectorAll('[data-pose]').forEach(b=>b.onclick=()=>setPose(c,b.dataset.pose));c.querySelector('.stage').onclick=()=>{document.querySelector('#lightbox img').src=c.querySelector('img').src;document.querySelector('#lightbox').showModal()}});
+document.querySelector('#size').oninput=e=>{document.documentElement.style.setProperty('--pet-height',e.target.value+'px');document.querySelector('#size-label').textContent=e.target.value+' px'};
+document.querySelector('#all-base').onclick=()=>cards.forEach(c=>setPose(c,'base'));
+document.querySelector('#all-activity').onclick=()=>cards.forEach(c=>setPose(c,'activity'));
+document.querySelector('#theme').onclick=e=>{const on=document.body.classList.toggle('dark');e.target.textContent=on?'浅色桌面':'深色桌面';e.target.setAttribute('aria-pressed',String(on))};
+document.querySelector('#close').onclick=()=>document.querySelector('#lightbox').close();
+document.querySelector('#lightbox').onclick=e=>{if(e.target===e.currentTarget)e.currentTarget.close()};
+</script></body></html>
