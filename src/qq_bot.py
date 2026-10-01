@@ -3,26 +3,14 @@
 qq_bot.py —— 自己连 QQ 网关
 
 ═══════════════════════════════════════════════════════════════
-  为什么非自己连不可
+  内置 QQ 接入
 ═══════════════════════════════════════════════════════════════
 
-Cherry Studio 的 QQ 适配器**拿到了**发送者的身份：
-
-    await this.processMessage(msg, chatId,
-        msg.author.member_openid ?? msg.author.id,
-        msg.author.username ?? "");
-
-但它的 processIncoming 里只有这么一行：
-
-    let textWithAttachments = message.text;
-
-userId 和 userName 就在作用域里，**从来没被用过**。
-所以模型看到的永远是裸文本，任何 MCP 工具都救不回来 ——
-身份根本没进 prompt。要拿到它，只能自己持有这条连接。
-
-注意：同一个 bot app 只能有一条网关连接。跑这个之前
-必须停用 Cherry Studio 的 QQ 通道，否则事件会随机分配，
-表现为"有时回有时不回"。工具在 tools/backup_cherry_qq.py。
+AIPet 直接连接 QQ 网关，保留事件中的发送者身份，交给 qq_bridge
+调用本地 brain、人格和记忆。无需 Cherry Studio 或外部 MCP。
+在 data/secrets.json 中填写 qq_appid 和 qq_secret，接入步骤见
+docs/QQ机器人接入提示词.md。更新安装后停用同一机器人的旧进程，
+避免多个客户端同时处理消息。旧 Cherry 配置提取脚本仅供历史迁移使用。
 
 ═══════════════════════════════════════════════════════════════
   为什么不用 qq-botpy
@@ -321,7 +309,7 @@ def access_token(force: bool = False) -> str:
             appid, secret = secrets()
             if not appid or not secret:
                 raise RuntimeError(
-                    "没配 QQ 凭据。跑一下 tools/backup_cherry_qq.py 从 Cherry Studio 抄过来。")
+                    "没配 QQ 凭据。请在 data/secrets.json 填写 qq_appid 和 qq_secret；见 docs/QQ机器人接入提示词.md。")
             tok, exp = fetch_token(appid, secret)
             _token_cache.update({"token": tok, "exp": exp})
             try:
@@ -465,7 +453,7 @@ class Dedupe:
 
     顺便管 msg_seq：同一个 msg_id 的每次回复要递增，
     重了会吃 40054005 消息被去重。
-    被动回复每条消息最多 5 次，所以这里也当计数器用。
+    保留每条消息 5 次的本地计数策略；仅传入本对象的调用启用它。
     """
 
     MAX_ENTRIES = 800
@@ -556,8 +544,7 @@ def reply(ev: QQEvent, content: str, dedupe: "Dedupe | None" = None) -> dict:
             log(f"这个消息已经回过 {Dedupe.MAX_REPLIES} 次了，不发了")
             return {"_skipped": "超过被动回复次数上限"}
 
-    # 被动回复有时限。超过就别回了 —— 会吃 40034128，
-    # 而且用户早就走开了，突然冒一句更奇怪。
+    # 保留当前本地消息年龄检查；平台规则与本地策略分开说明。
     if ev.msg_id and ev.age_seconds > PASSIVE_LIMIT_S:
         log(f"消息已经过了 {ev.age_seconds:.0f} 秒，超过被动回复窗口，放弃")
         return {"_skipped": "超过被动回复时限"}
@@ -567,7 +554,7 @@ def reply(ev: QQEvent, content: str, dedupe: "Dedupe | None" = None) -> dict:
     return send_c2c(ev.user_openid, content, ev.msg_id, seq)
 
 
-# 群聊官方是 5 分钟。取 240 秒，留一分钟给发送本身。
+# 本程序保留的消息年龄阈值；不作为当前平台规则的结论。
 PASSIVE_LIMIT_S = 240
 
 # ── 看门狗 ──
@@ -1254,8 +1241,8 @@ def _run(debug_only: bool = False) -> int:
     app = QCoreApplication(sys.argv)
 
     appid, secret = secrets()
-    if not appid:
-        print("没配 QQ 凭据。先跑：python tools/backup_cherry_qq.py")
+    if not appid or not secret:
+        print("没配 QQ 凭据。请在 data/secrets.json 填写 qq_appid 和 qq_secret；见 docs/QQ机器人接入提示词.md。")
         return 1
     print(f"app_id {appid}")
     try:

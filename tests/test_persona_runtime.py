@@ -246,23 +246,29 @@ class PersonaRuntime(unittest.TestCase):
         self.assertNotIn('对方：',soul)
         self.assertEqual(exchanges[0][-1]['content'],'嗯？')
 
-    def test_import_dialog_keeps_current_persona_and_distinguishes_copies(self):
+    def test_import_dialog_updates_selected_persona_and_distinguishes_same_names(self):
         from PySide6.QtWidgets import QApplication
         import persona_ui as UI
         app = QApplication.instance() or QApplication([])
         source = self.root/'SOUL.md'
         source.write_bytes('# 同名角色\r\n\r\n保留正文\r\n'.encode('utf-8'))
+        original = source.read_bytes()
         first = self.manager.import_soul(source)
+        second = self.manager.import_soul(source)
         self.manager.set_active(first['id'])
         with patch.object(UI,'PersonaManager',return_value=self.manager):
             dialog = UI.PersonaDialog()
         try:
+            dialog._reload(second['id'])
+            source.write_bytes('# 同名角色\r\n\r\n新的正文\r\n'.encode('utf-8'))
             with patch.object(UI.QFileDialog,'getOpenFileName',return_value=(str(source),'')), \
+                 patch.object(UI.QMessageBox,'question',return_value=UI.QMessageBox.Yes), \
                  patch.object(UI.QMessageBox,'information') as notice:
                 dialog._import_soul()
             self.assertEqual(self.manager.active_id(),first['id'])
-            self.assertNotEqual(dialog.current_id,first['id'])
-            self.assertEqual(Path(first['soul']).read_bytes(),source.read_bytes())
+            self.assertEqual(dialog.current_id,second['id'])
+            self.assertEqual(Path(first['soul']).read_bytes(),original)
+            self.assertEqual(Path(second['soul']).read_bytes(),source.read_bytes())
             labels = [dialog.list.item(i).text() for i in range(dialog.list.count())]
             self.assertTrue(any('同名 2' in label for label in labels))
             notice.assert_called_once()

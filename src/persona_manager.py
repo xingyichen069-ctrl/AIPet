@@ -2,9 +2,42 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import tempfile
+from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
+
+
+@contextmanager
+def _soul_lock(folder: Path):
+    """One writer per role, including separate desktop processes; crash releases it."""
+    # Keep the inode in place after releasing the OS lock. Unlinking it could let
+    # another writer lock a different file while an existing handle is in use.
+    with (folder / ".SOUL.lock").open("a+b") as stream:
+        if os.name == "nt":
+            import msvcrt
+            stream.seek(0, os.SEEK_END)
+            if stream.tell() == 0:
+                stream.write(b"\0")
+                stream.flush()
+            stream.seek(0)
+            acquire = lambda: msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            release = lambda: msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            acquire = lambda: fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            release = lambda: fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        try:
+            acquire()
+        except OSError as error:
+            raise OSError("另一个窗口正在保存这个角色，请稍后重试。") from error
+        try:
+            yield
+        finally:
+            release()
 
 
 class PersonaManager:
@@ -48,7 +81,7 @@ class PersonaManager:
         if not (hiyori / "SOUL.md").exists() and self.legacy_soul.exists():
             hiyori.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(self.legacy_soul, hiyori / "SOUL.md")
-            if self.legacy_boundaries.exists():
+            if self.legacy_boundaries.exists() and not (hiyori / "BOUNDARIES.md").exists():
                 shutil.copyfile(self.legacy_boundaries, hiyori / "BOUNDARIES.md")
         for pid in defaults:
             target = self.characters_dir / pid
@@ -180,18 +213,66 @@ class PersonaManager:
     def read_soul(self, pid: str | None = None) -> str:
         folder = self.characters_dir / self.slug(pid or self.active_id())
         path = folder / "SOUL.md"
-        return path.read_text(encoding="utf-8") if path.exists() else ""
+        return path.read_text(encoding="utf-8-sig") if path.exists() else ""
+
+    @staticmethod
+    def _write_soul(folder: Path, raw: bytes) -> Path | None:
+        """Back up the previous bytes before atomically publishing an explicit edit."""
+        soul = folder / "SOUL.md"
+        if soul.exists() and soul.read_bytes() == raw:
+            return None
+        folder.mkdir(parents=True, exist_ok=True)
+        with _soul_lock(folder):
+            return PersonaManager._write_soul_locked(folder, raw)
+
+    @staticmethod
+    def _write_soul_locked(folder: Path, raw: bytes) -> Path | None:
+        soul = folder / "SOUL.md"
+        old = soul.read_bytes() if soul.exists() else None
+        if old == raw:
+            return None
+        folder.mkdir(parents=True, exist_ok=True)
+        backup = None
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="wb", dir=folder, prefix=".SOUL-",
+                                             suffix=".tmp", delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if old is not None:
+                backups = folder / "backups"
+                backups.mkdir(exist_ok=True)
+                prefix = "SOUL-" + datetime.now().strftime("%Y%m%d-%H%M%S-")
+                with tempfile.NamedTemporaryFile(mode="wb", dir=backups, prefix=prefix,
+                                                 suffix=".md", delete=False) as stream:
+                    backup = Path(stream.name)
+                    try:
+                        stream.write(old)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    except BaseException:
+                        stream.close()
+                        backup.unlink(missing_ok=True)
+                        raise
+                if soul.read_bytes() != old:
+                    raise OSError("人格文件刚被其他程序修改，请重新打开后再操作。")
+            temporary.replace(soul)
+            return backup
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
     def save_soul(self, pid: str, text: str, name: str | None = None) -> dict:
         pid = self.slug(pid)
         folder = self.characters_dir / pid
-        folder.mkdir(parents=True, exist_ok=True)
         text = text.strip() + "\n"
         if not text.strip():
             raise ValueError("人格内容不能为空。")
         if name and not text.lstrip().startswith("#"):
             text = f"# {name.strip()}\n\n{text}"
-        (folder / "SOUL.md").write_text(text, encoding="utf-8")
+        self._write_soul(folder, text.encode("utf-8"))
         return self.active() if pid == self.active_id() else next(x for x in self.list_personas() if x["id"] == pid)
 
     def create(self, name: str, soul: str = "") -> dict:
@@ -202,12 +283,22 @@ class PersonaManager:
             soul = f"# {name}\n\n## 说话方式\n- 温和、自然，先理解再回应。\n"
         return self.save_soul(pid, soul, name=name)
 
-    def import_soul(self, source: str | Path, pid: str | None = None) -> dict:
-        """Import an independent copy without changing its text or active persona."""
+    def import_soul(self, source: str | Path, pid: str | None = None, *,
+                    overwrite: bool = False) -> dict:
+        """Keep source bytes; replace an explicit target only after caller confirmation."""
         source = Path(source)
         raw = source.read_bytes()
         if not raw.decode("utf-8-sig").strip():
             raise ValueError("人格内容不能为空。")
+        if overwrite:
+            # Never infer the target from a generic filename or the active persona.
+            item = next((item for item in self.list_personas() if item["id"] == pid), None)
+            if item is None:
+                raise ValueError("请先选择要更新的已有角色。")
+            backup = self._write_soul(Path(item["path"]), raw)
+            item["name"] = self._display_name(Path(item["path"]), Path(item["soul"]))
+            item["backup"] = str(backup) if backup else ""
+            return item
         base = self.slug(pid or source.stem)
         if base == "soul":
             base = "imported-persona"

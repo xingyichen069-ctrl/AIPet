@@ -105,6 +105,10 @@ def start(visible: bool = False) -> int:
     if QB.read_pid():
         print("已经在跑了。要重启用 restart。")
         return 0
+    if not all(QB.secrets()):
+        print("没配齐 QQ 凭据。请通过配置API.bat，在 data/secrets.json 填写 qq_appid 和 qq_secret。")
+        print("接入步骤见 docs/QQ机器人接入提示词.md；不需要 Cherry Studio 或外部 MCP。")
+        return 1
 
     py = _pythonc() if visible else _python()
     if visible:

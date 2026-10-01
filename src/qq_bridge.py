@@ -20,21 +20,13 @@ qq_bridge.py —— 把 QQ 来的消息接到小日和的脑子里
 单测组装逻辑，不用联网也不用 API key。
 
 ═══════════════════════════════════════════════════════════════
-  群里为什么不能用高思考档位
+  本地回复处理
 ═══════════════════════════════════════════════════════════════
 
-QQ 规定被动回复必须**5 分钟内**发出，否则吃 40034128。
-
-而 thinking.json 里的 deep/max 档，思维链能跑好几分钟。
-在桌宠里没问题（你等得起），群里就是稳定超时。
-
-普通群聊默认跟随桌面档位。群成员可以用档位指令切换本群档位；
-神格状态（雷霆大思考）会放宽记忆和回复额度，但仍受 QQ 的 5 分钟被动回复窗口约束。
-
-★ 但**额度不是时间闸**。给多少 token 和"会不会超时"是两件事：
-  token 额度决定思维链会不会被拦腰砍断，时间由 REPLY_BUDGET_S 管。
-  超时的答案会被丢弃、不发出，所以放宽额度不会去撞 40034128，
-  代价只是"想太久"的那条被丢掉（日志里留一行）。
+群聊和私聊默认跟随桌面，群覆盖可用 /档位 跟随 清除，不强制 daily。
+当前实现仍设 REPLY_BUDGET_S 处理预算、输出额度和文本清洗；
+这些是本程序保留的处理策略，不代表当前 QQ 平台的硬性会话限制。
+接入无需 Cherry Studio 或外部 MCP，步骤见 docs/QQ机器人接入提示词.md。
 
 ═══ 用法 ═══
     python src/qq_bridge.py selftest      # 灌假事件，不联网
@@ -65,28 +57,17 @@ if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("
     except Exception:
         pass
 
-# ── 群聊的硬约束 ────────────────────────────────────────────
-# 被动回复 5 分钟。留一分钟给发送本身，取 240 秒。
+# ── 本地回复预算 ────────────────────────────────────────────
+# 保留历史上的 240 秒处理预算，当前平台规则与本地策略分开说明。
 REPLY_BUDGET_S = 240
 
 # 群聊默认跟随桌面；每个群可以用指令覆盖或恢复跟随。
 
-# ★ max_tokens 是**思维链和正文共享的**。
-#   踩过两次：
-#     设成 300 —— 思维链吃掉 158~288，正文只剩几十 token，想到一半被砍断，
-#       出来就是"逻辑不通"。
-#     设成 700 —— 群友发一道带图的题，读图的文字一进上下文，思维链涨到
-#       1091 字，700 又被吃光，正文一个字都没有，整条消息哑掉。
-#
-#   所以放宽到 10500（原值的 15 倍）。放宽之后思维链不再动不动被截断。
-#
-#   ★ 时间上没有风险：下面 REPLY_BUDGET_S 那道 240 秒的闸是独立的，
-#     生成超时会被丢弃、根本不发出去，撞不到 QQ 的 5 分钟窗口。
-#     代价是"想太久"的答案会被丢掉 —— 日志里会留一行，不是静默失败。
+# 思维链和正文共享输出额度；处理时间另受 REPLY_BUDGET_S 限制。
 GROUP_MAX_TOKENS = 10500
 GROUP_THUNDER_MAX_TOKENS = 120000
 
-# 单聊没有 5 分钟的紧迫感，但输出长度限制是一样的
+# 私聊也沿用当前的普通输出额度和本地处理预算。
 C2C_MAX_TOKENS = 10500
 
 # ★ 给模型看的长度上限，必须和 qq_text.QQ_SAFE_BYTES 对得上。
@@ -562,7 +543,7 @@ def command_reply(ev: QB.QQEvent, who: dict) -> str | None:
         log(f"查更新（{ev.scene} by {who['name']!r}）→ "
             + (f"有新版 {r['latest_clean']}" if r.get("newer")
                else ("已是最新" if r.get("ok") else f"没查成：{r.get('error')}")))
-        # ★ 结论里不许出现 URL（QQ 会拒收整条），describe() 已经保证这点。
+        # describe() 沿用当前的无 URL 展示策略。
         return UP.describe(r)
 
     m = CMD_RE.match(text)
@@ -1123,12 +1104,12 @@ def run(reply_enabled: bool = True) -> int:
 
     app = QCoreApplication(sys.argv)
 
-    appid, _ = QB.secrets()
-    if not appid:
-        print("没配 QQ 凭据。先跑：python tools/backup_cherry_qq.py")
+    appid, secret = QB.secrets()
+    if not appid or not secret:
+        print("没配 QQ 凭据。请在 data/secrets.json 填写 qq_appid 和 qq_secret；见 docs/QQ机器人接入提示词.md。")
         return 1
     if reply_enabled and not B.api_key():
-        print("没配 DeepSeek key，她张不开嘴。先：python src/brain.py setkey sk-xxxx")
+        print("没配大脑 API 密钥。请通过配置API.bat，在 data/secrets.json 填写 deepseek_api_key。")
         return 1
 
     before = P.prune()

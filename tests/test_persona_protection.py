@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -126,6 +127,183 @@ class PersonaImports(unittest.TestCase):
         self.manager.save_soul(item['id'], '# Edited\nMy deliberate change')
         self.assertEqual(self.manager.read_soul(item['id']), '# Edited\nMy deliberate change\n')
         self.assertEqual(len(self.manager.list_personas()), before_count)
+        backups = list((Path(item['path']) / 'backups').glob('SOUL-*.md'))
+        self.assertEqual([p.read_bytes() for p in backups], [source.read_bytes()])
+
+    def test_legacy_initialization_keeps_an_existing_character_boundary(self):
+        soul = self.manager.characters_dir / 'hiyori/SOUL.md'
+        soul.unlink()
+        boundary = soul.with_name('BOUNDARIES.md')
+        boundary.write_bytes(b'\xef\xbb\xbfMY CHARACTER RULES\r\n')
+        self.manager.legacy_soul.write_bytes(b'My legacy persona\r\n')
+        self.manager.legacy_boundaries.write_bytes(b'Older shared rules\r\n')
+        PersonaManager(self.root)
+        self.assertEqual(soul.read_bytes(), b'My legacy persona\r\n')
+        self.assertEqual(boundary.read_bytes(), b'\xef\xbb\xbfMY CHARACTER RULES\r\n')
+        self.assertEqual(self.manager.legacy_boundaries.read_bytes(), b'Older shared rules\r\n')
+
+    def test_confirmed_import_replaces_only_explicit_target_and_keeps_raw_backup(self):
+        original = b'\xef\xbb\xbf# Same\r\n  old wording  \r\n'
+        target = self.manager.import_soul(self.source('old', original))
+        folder = Path(target['path'])
+        for name in ('BOUNDARIES.md', 'avatar.png', 'DIALOGUE.json', 'MOODS.json'):
+            (folder / name).write_bytes(('keep ' + name).encode())
+        before = snapshot(self.root)
+        replacement = b'\xef\xbb\xbf# Same\r\n  new wording  \r\n'
+        source = self.source('update', replacement)
+        result = self.manager.import_soul(source, target['id'], overwrite=True)
+        self.assertEqual(result['id'], target['id'])
+        self.assertEqual(Path(result['soul']).read_bytes(), replacement)
+        self.assertEqual(Path(result['backup']).read_bytes(), original)
+        self.assertEqual(self.manager.read_soul(target['id']), '# Same\n  new wording  \n')
+        after = snapshot(self.root)
+        soul_relative = Path(target['soul']).relative_to(self.root).as_posix()
+        for path, raw in before.items():
+            if path != soul_relative:
+                self.assertEqual(after[path], raw)
+        self.assertEqual(self.manager.active_id(), 'hiyori')
+        self.assertFalse(result['active'])
+        self.assertEqual(len(self.manager.list_personas()), 2)
+        self.assertEqual(source.read_bytes(), replacement)
+
+    def test_overwrite_requires_existing_explicit_id_and_valid_text(self):
+        source = self.source('source', b'# Update\n')
+        for target in (None, 'missing', '../hiyori', 'HIYORI'):
+            with self.subTest(target=target):
+                before = snapshot(self.root)
+                with self.assertRaises(ValueError):
+                    self.manager.import_soul(source, target, overwrite=True)
+                self.assertEqual(snapshot(self.root), before)
+        for raw in (b'', b'\xef\xbb\xbf \r\n', b'\xffinvalid'):
+            source.write_bytes(raw)
+            before = snapshot(self.root)
+            with self.assertRaises((ValueError, UnicodeError)):
+                self.manager.import_soul(source, 'hiyori', overwrite=True)
+            self.assertEqual(snapshot(self.root), before)
+
+    def test_identical_import_is_noop_and_repeated_edits_keep_all_backups(self):
+        soul = self.manager.characters_dir / 'hiyori/SOUL.md'
+        original = soul.read_bytes()
+        before = snapshot(self.root)
+        result = self.manager.import_soul(soul, 'hiyori', overwrite=True)
+        self.assertEqual(result['backup'], '')
+        self.assertEqual(snapshot(self.root), before)
+        source = self.source('source', b'# First edit\n')
+        first = self.manager.import_soul(source, 'hiyori', overwrite=True)
+        source.write_bytes(b'# Second edit\n')
+        second = self.manager.import_soul(source, 'hiyori', overwrite=True)
+        self.assertNotEqual(first['backup'], second['backup'])
+        self.assertEqual(Path(first['backup']).read_bytes(), original)
+        self.assertEqual(Path(second['backup']).read_bytes(), b'# First edit\n')
+        self.assertEqual(self.manager.active_id(), 'hiyori')
+
+    def test_backup_failure_blocks_overwrite_and_cleans_partial_files(self):
+        source = self.source('source', b'# New\n')
+        soul = self.manager.characters_dir / 'hiyori/SOUL.md'
+        original = soul.read_bytes()
+        with patch('persona_manager.os.fsync', side_effect=[None, OSError('backup failed')]):
+            with self.assertRaisesRegex(OSError, 'backup failed'):
+                self.manager.import_soul(source, 'hiyori', overwrite=True)
+        self.assertEqual(soul.read_bytes(), original)
+        self.assertEqual(list((soul.parent / 'backups').iterdir()), [])
+        self.assertEqual(list(soul.parent.glob('.SOUL-*')), [])
+
+    def test_publish_failure_keeps_original_and_complete_backup(self):
+        source = self.source('source', b'# New\n')
+        soul = self.manager.characters_dir / 'hiyori/SOUL.md'
+        original = soul.read_bytes()
+        with patch.object(Path, 'replace', side_effect=OSError('publish failed')):
+            with self.assertRaisesRegex(OSError, 'publish failed'):
+                self.manager.import_soul(source, 'hiyori', overwrite=True)
+        self.assertEqual(soul.read_bytes(), original)
+        self.assertEqual([p.read_bytes() for p in (soul.parent / 'backups').iterdir()], [original])
+        self.assertEqual(list(soul.parent.glob('.SOUL-*')), [])
+
+    def test_overlapping_writers_cannot_both_publish_from_the_same_old_version(self):
+        first = self.source('first', b'# First edit\n')
+        second = self.source('second', b'# Second edit\n')
+        another_manager = PersonaManager(self.root)
+        soul = self.manager.characters_dir / 'hiyori/SOUL.md'
+        original = soul.read_bytes()
+        publishing = threading.Event()
+        proceed = threading.Event()
+        original_replace = Path.replace
+
+        def pause_publish(path, target):
+            if path.name.startswith('.SOUL-'):
+                publishing.set()
+                if not proceed.wait(5):
+                    raise RuntimeError('writer was not released')
+            return original_replace(path, target)
+
+        with ThreadPoolExecutor(max_workers=1) as pool, patch.object(Path, 'replace', pause_publish):
+            future = pool.submit(self.manager.import_soul, first, 'hiyori', overwrite=True)
+            try:
+                self.assertTrue(publishing.wait(5))
+                with self.assertRaisesRegex(OSError, '正在保存'):
+                    another_manager.import_soul(second, 'hiyori', overwrite=True)
+                self.assertEqual(soul.read_bytes(), original)
+            finally:
+                proceed.set()
+            first_result = future.result(timeout=5)
+        second_result = another_manager.import_soul(second, 'hiyori', overwrite=True)
+        self.assertEqual(Path(first_result['backup']).read_bytes(), original)
+        self.assertEqual(Path(second_result['backup']).read_bytes(), first.read_bytes())
+        self.assertEqual(soul.read_bytes(), second.read_bytes())
+
+
+class PersonaImportUI(unittest.TestCase):
+    source = PersonaImports.source
+
+    def setUp(self):
+        PersonaImports.setUp(self)
+        from PySide6.QtWidgets import QApplication
+        import persona_ui as UI
+        self.ui = UI
+        self.app = QApplication.instance() or QApplication([])
+        self.selected = self.manager.create('friend', '# Friend\nOriginal friend\n')
+        with patch.object(UI, 'PersonaManager', return_value=self.manager):
+            self.dialog = UI.PersonaDialog()
+        self.addCleanup(self.dialog.close)
+        self.dialog._reload(self.selected['id'])
+
+    def test_cancel_keeps_files_selection_and_unsaved_text(self):
+        source = self.source('source', b'# Friend\nReplacement\n')
+        self.dialog.editor.setPlainText('unsaved persona')
+        before = snapshot(self.root)
+        with patch.object(self.ui.QFileDialog, 'getOpenFileName', return_value=(str(source), '')), \
+                patch.object(self.ui.QMessageBox, 'question', return_value=self.ui.QMessageBox.No) as ask:
+            self.dialog._import_soul()
+        self.assertIn('Friend', ask.call_args.args[2])
+        self.assertIn(self.selected['id'], ask.call_args.args[2])
+        self.assertEqual(ask.call_args.args[-1], self.ui.QMessageBox.No)
+        self.assertEqual(snapshot(self.root), before)
+        self.assertEqual(self.dialog.editor.toPlainText(), 'unsaved persona')
+        self.assertEqual(self.dialog.current_id, self.selected['id'])
+
+    def test_confirm_updates_selected_role_without_extra_entry_or_losing_mood_edits(self):
+        source = self.source('source', b'# Updated friend\r\nNew wording\r\n')
+        self.dialog.editor.setPlainText('unsaved persona')
+        self.dialog.mood_editor.setPlainText('unsaved moods')
+        with patch.object(self.ui.QFileDialog, 'getOpenFileName', return_value=(str(source), '')), \
+                patch.object(self.ui.QMessageBox, 'question', return_value=self.ui.QMessageBox.Yes), \
+                patch.object(self.ui.QMessageBox, 'information') as info:
+            self.dialog._import_soul()
+        self.assertIn('备份', info.call_args.args[2])
+        self.assertEqual(Path(self.selected['soul']).read_bytes(), source.read_bytes())
+        self.assertEqual(self.dialog.current_id, self.selected['id'])
+        self.assertEqual(self.manager.active_id(), 'hiyori')
+        self.assertEqual(self.dialog.list.count(), 2)
+        self.assertEqual(self.dialog.editor.toPlainText(), '# Updated friend\nNew wording\n')
+        self.assertEqual(self.dialog.mood_editor.toPlainText(), 'unsaved moods')
+
+    def test_file_dialog_cancel_does_not_ask_or_write(self):
+        before = snapshot(self.root)
+        with patch.object(self.ui.QFileDialog, 'getOpenFileName', return_value=('', '')), \
+                patch.object(self.ui.QMessageBox, 'question') as ask:
+            self.dialog._import_soul()
+        ask.assert_not_called()
+        self.assertEqual(snapshot(self.root), before)
 
 
 class PersonaCandidates(unittest.TestCase):

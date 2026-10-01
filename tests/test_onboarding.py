@@ -1,6 +1,7 @@
 """First-install and migration acceptance using synthetic local files only."""
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
+from contextlib import redirect_stdout
 
 import bootstrap
 from persona_manager import PersonaManager
@@ -28,6 +30,33 @@ def load_tool(name):
 MIG = load_tool("migrate")
 WIZ = load_tool("update_wizard")
 FIRST = load_tool("first_run")
+QQ = load_tool("qq_ctl")
+
+
+class QQStartup(unittest.TestCase):
+    def test_missing_credentials_never_start_background_process(self):
+        for credentials in (("", ""), ("example-app", ""), ("", "example-secret")):
+            with self.subTest(credentials=credentials), \
+                    patch.object(QQ.QB, "read_pid", return_value=None), \
+                    patch.object(QQ.QB, "secrets", return_value=credentials), \
+                    patch.object(QQ.subprocess, "Popen") as spawn, \
+                    redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(QQ.start(), 1)
+                spawn.assert_not_called()
+                self.assertIn("qq_appid", output.getvalue())
+                self.assertIn("qq_secret", output.getvalue())
+                self.assertNotIn("example-secret", output.getvalue())
+
+    def test_configured_start_dispatches_native_bridge_without_exposing_credentials(self):
+        executable = PROJECT / 'runtime/pythonw.exe'
+        with patch.object(QQ.QB, "read_pid", side_effect=[None, 321, 321]), \
+                patch.object(QQ.QB, "secrets", return_value=("example-app", "example-secret")), \
+                patch.object(QQ, "_python", return_value=executable), \
+                patch.object(QQ.subprocess, "Popen") as spawn, patch("time.sleep"), \
+                redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(QQ.start(), 0)
+        self.assertEqual(spawn.call_args.args[0], [str(executable), str(QQ.BRIDGE), "run"])
+        self.assertNotIn("example-secret", output.getvalue())
 
 
 class Onboarding(unittest.TestCase):
