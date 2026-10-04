@@ -4,14 +4,13 @@
 
 ## 启动
 
-在这份候选的根目录运行。当前机器可在 PowerShell 使用已有解释器，无需安装新依赖：
+完成 README 中的环境准备后，在项目根目录运行。PowerShell 示例：
 
 ```powershell
-Set-Location 'D:\CXY\AIPet-0.5.0\AIPet-0.5.0\work\main-stability-20261004'
-& 'D:\CXY\AIPet-0.5.0\AIPet-0.5.0\.venv\Scripts\python.exe' -X utf8 -B tools/performance_lab.py
+& .\.venv\Scripts\python.exe -X utf8 -B tools/performance_lab.py
 ```
 
-在已经安装 PySide6 的其他环境中运行 `python tools/performance_lab.py` 即可。示意角色不需要 Live2D SDK；原生 Hiyori 预览需要现有 live2d-py、OpenGL 和仓库内的 Hiyori 运行时资源。原生预览失败会回到示意绘制并显示原因。
+便携环境将解释器替换为 `.\runtime\python.exe`；在已经安装 PySide6 的其他环境中运行 `python tools/performance_lab.py` 即可。示意角色不需要 Live2D SDK；原生 Hiyori 预览需要现有 live2d-py、OpenGL 和仓库内的 Hiyori 运行时资源。原生预览失败会回到示意绘制并显示原因。
 
 ## 推荐先试的过程
 

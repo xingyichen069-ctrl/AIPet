@@ -5,7 +5,7 @@
 
 <p align="center">
   <strong>桌面留个位置，想说话时就叫她。</strong><br>
-  <code>0.5.0-beta.2</code> · Windows 10/11 x64 · Python 3.11–3.14 · macOS 实验性
+  <code>0.5.0-beta.3</code> · Windows 10/11 x64 · Python 3.11–3.14 · macOS 实验性
 </p>
 
 <p align="center">
@@ -233,8 +233,9 @@ zsh 启动桌宠.command prepare
 | [备份与恢复](docs/备份与恢复.md) | [思考强度配置](docs/思考强度配置手册.md) | [命令行参考](docs/命令行参考.md) |
 | [QQ 接入](docs/QQ机器人接入提示词.md) | [主题说明](docs/主题使用说明.md) | [人格运行时调整](docs/人格运行时调整.md) |
 | [对话、约定与材料](新增功能说明.md) | [施工日志](CHANGELOG.md) | [版本管理](docs/版本管理.md) |
+| [beta.3 修订记录](docs/0.5.0-beta.3修订记录.md) | [表演控制与离线测试台](docs/performance-20261004/README.md) | [稳定性工作包](docs/stability-20261004/README.md) |
 
-项目仍是 **beta**。已有 Windows 隔离功能验证与独立 Live2D 渲染检查；全新机器联网安装、真实 DeepSeek/视觉服务、QQ 端到端、Mac 和长期常驻仍需实机验收。具体结果和未完成项见 [beta.2 修订记录](docs/0.5.0-beta.2修订记录.md)，前一阶段见 [首次安装记录](docs/首次安装与指南修订记录.md)。
+项目仍是 **beta**。已有 Windows 隔离功能验证与独立 Live2D 渲染检查；全新机器联网安装、真实 DeepSeek/视觉服务、QQ 端到端、Mac 和长期常驻仍需实机验收。具体结果和未完成项见 [beta.3 修订记录](docs/0.5.0-beta.3修订记录.md)，历史记录见 [beta.2 修订记录](docs/0.5.0-beta.2修订记录.md)和[首次安装记录](docs/首次安装与指南修订记录.md)。
 
 <details>
 <summary>🛠️ 想一起修小屋？隔离测试入口在这里</summary>

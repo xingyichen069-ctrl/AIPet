@@ -4,6 +4,8 @@
 
 完整隔离回归执行 300 项：298 通过，2 项因 Windows 符号链接权限跳过；原生 Hiyori、故障恢复和测试台画面检查通过。中途失败及修正过程保留在验证记录中。
 
+> 发行衔接：本工作包归入 [0.5.0-beta.3](../0.5.0-beta.3修订记录.md)。下文保留开发阶段的提交关系与证据，发行前核对另见修订记录。
+
 ## 交付入口
 
 | 内容 | 入口 |
@@ -26,12 +28,13 @@ flowchart LR
 
 ## 现在怎样试
 
-在 PowerShell 打开这份独立候选里的测试台：
+完成 README 中的环境准备后，在项目根目录的 PowerShell 打开测试台：
 
 ```powershell
-Set-Location 'D:\CXY\AIPet-0.5.0\AIPet-0.5.0\work\main-stability-20261004'
-& 'D:\CXY\AIPet-0.5.0\AIPet-0.5.0\.venv\Scripts\python.exe' -X utf8 -B tools/performance_lab.py
+& .\.venv\Scripts\python.exe -X utf8 -B tools/performance_lab.py
 ```
+
+便携环境将解释器替换为 `.\runtime\python.exe`。不需要填写 API key；只使用无界面示例时，任意兼容的标准库 Python 即可。
 
 先载入“喝茶被拖拽打断”或“旧回复迟到”示例，点击播放，查看状态与拒绝理由。然后新建记录，手动设置心情和动作。导出的 JSON 能重新导入，也能在无界面入口复核。详细步骤见测试台说明。
 
@@ -39,7 +42,7 @@ Set-Location 'D:\CXY\AIPet-0.5.0\AIPet-0.5.0\work\main-stability-20261004'
 
 ## 本地范围与后续拆分
 
-工作目录为 `D:\CXY\AIPet-0.5.0\AIPet-0.5.0\work\main-stability-20261004`，本地分支 `codex/stability-20261004`。公开 main 基线为 `c0da0943e795f5682d715315d3d97a17f7a967d3`；本轮从含前次稳定性修复的 `f3b0d8d` 继续。VERSION 保持 `0.5.0-beta.2`，未建标签、未推送。
+开发工作目录为 `D:\CXY\AIPet-0.5.0\AIPet-0.5.0\work\main-stability-20261004`，本地分支 `codex/stability-20261004`。公开 main 基线为 `c0da0943e795f5682d715315d3d97a17f7a967d3`；本轮从含前次稳定性修复的 `f3b0d8d` 继续。独立开发阶段 VERSION 保持 `0.5.0-beta.2`，当时未建标签、未推送；后续发行统一为 `0.5.0-beta.3`。
 
 代码按控制器与测试台两个提交拆分，实施计划和最终交接记录另行提交。施工日志只补简短功能条目，实验过程放在本工作包。
 
