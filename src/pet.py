@@ -993,6 +993,7 @@ class PetWindow(QWidget):
         self.updater.start()
 
     def on_update_done(self, r: dict):
+        import update as UP
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QDesktopServices
         from PySide6.QtWidgets import QMessageBox
@@ -1000,19 +1001,12 @@ class PetWindow(QWidget):
         if not r.get("ok"):
             QMessageBox.warning(self, "检查更新", f"没查成。\n\n{r.get('error', '')}")
             return
-        if not r.get("newer"):
-            QMessageBox.information(self, "检查更新",
-                                    f"已经是最新的了。\n\n本机 {r['current']}。")
-            return
-
         box = QMessageBox(self)
         box.setWindowTitle("检查更新")
-        box.setText(f"有新版本 {r['latest_clean']}。")
-        box.setInformativeText(
-            f"本机是 {r['current']}。\n\n"
-            f"这里不会替你下载或覆盖任何东西 —— 打开下载页，你自己决定。")
-        go = box.addButton("打开下载页", QMessageBox.AcceptRole)
-        box.addButton("以后再说", QMessageBox.RejectRole)
+        box.setText(UP.describe(r))
+        box.setInformativeText("打开的是本次核对的源码提交，可在页面下载 ZIP。更新程序不会自动下载或覆盖文件。")
+        go = box.addButton("查看已核对的源码", QMessageBox.AcceptRole)
+        box.addButton("关闭", QMessageBox.RejectRole)
         box.exec()
         if box.clickedButton() is go:
             QDesktopServices.openUrl(QUrl(r["url"]))
