@@ -39,6 +39,7 @@ live2d_widget.py —— 把 Live2D 模型画进 Qt 窗口
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from pathlib import Path
@@ -84,6 +85,33 @@ def default_format() -> QSurfaceFormat:
     return f
 
 
+def validate_model_files(model_json: str | Path) -> Path:
+    """Check the manifest and essential files before handing them to native code.
+
+    This is a missing-file check, not a validator for arbitrary native assets.
+    Return the moc path for the SDK's consistency check.
+    """
+    path = Path(model_json)
+    if not path.is_file():
+        raise ValueError(f"找不到模型入口：{path.name or path}")
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise ValueError("模型入口不是可读取的 UTF-8 JSON 文件。") from exc
+    refs = manifest.get("FileReferences") if isinstance(manifest, dict) else None
+    if not isinstance(refs, dict) or manifest.get("Version") != 3:
+        raise ValueError("需要 Version 为 3 的 model3.json 模型入口。")
+    moc, textures = refs.get("Moc"), refs.get("Textures")
+    if (not isinstance(moc, str) or not moc or not isinstance(textures, list)
+            or not textures or any(not isinstance(t, str) or not t for t in textures)):
+        raise ValueError("模型入口缺少 Moc 或 Textures 引用。")
+    for name in [moc, *textures]:
+        asset = path.parent / name
+        if not asset.is_file() or asset.stat().st_size == 0:
+            raise ValueError(f"模型资源缺失或为空：{name}")
+    return path.parent / moc
+
+
 # ═══════════════════════════════════════════════════════════════
 #  渲染组件
 # ═══════════════════════════════════════════════════════════════
@@ -95,6 +123,9 @@ class Live2DWidget(QOpenGLWidget):
     drag_finished = Signal()       # 拖完窗口，让上层保存位置 / 挪气泡
     hovered = Signal(bool)         # 鼠标进入 / 离开角色实体
     reload_finished = Signal(bool, str)  # (success, message)
+    render_ready = Signal()       # first successful draw in the current context
+    render_failed = Signal(str)   # emitted once; the owner switches to a static pet
+    STARTUP_TIMEOUT_MS = 5000
 
     def __init__(self, model_json: str | Path, parent: QWidget | None = None,
                  zoom: float = 1.0, fps: int = 30,
@@ -109,6 +140,9 @@ class Live2DWidget(QOpenGLWidget):
 
         self.model = None
         self._ready = False
+        self._has_frame = False
+        self._failed = False
+        self._stopped = False
         self._press_pos = None
         self._press_global_pos = None
         self._win_off = None       # 拖动时记录的窗口偏移
@@ -127,15 +161,25 @@ class Live2DWidget(QOpenGLWidget):
         self.setAttribute(Qt.WA_AlwaysStackOnTop, True)
         self.setAutoFillBackground(False)
         self.setMouseTracking(True)
+        self.setFormat(default_format())
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.update)
         self._timer.setInterval(max(16, int(1000 / max(1, fps))))
+        self._startup_timer = QTimer(self)
+        self._startup_timer.setSingleShot(True)
+        self._startup_timer.timeout.connect(self._startup_expired)
 
     # ---------------------------------------------------------- GL 生命周期
 
     def initializeGL(self):
+        if self._stopped or self._failed:
+            return
+        context = self.context()
+        if context is not None:
+            context.aboutToBeDestroyed.connect(self._cleanup_context)
         if not HAS_LIVE2D:
+            self._fail("初始化", LIVE2D_ERROR or "Live2D 依赖不可用。")
             return
         try:
             live2d.glInit()
@@ -144,18 +188,82 @@ class Live2DWidget(QOpenGLWidget):
             self._timer.start()
             QTimer.singleShot(200, self.play_idle)
         except Exception as e:                       # noqa: BLE001
-            print(f"[live2d] 初始化失败：{e}", file=sys.stderr)
-            self._ready = False
+            self._fail("初始化", str(e))
 
     def _load_model(self, model_json: str):
         """Create and configure a model. Must run while this widget owns the GL context."""
+        moc = validate_model_files(model_json)
         model = live2d.LAppModel()
-        model.LoadModelJson(str(model_json))
-        model.SetAutoBlinkEnable(self._auto_blink)
-        model.SetAutoBreathEnable(self._auto_breath)
-        if abs(self.zoom - 1.0) > 1e-6:
-            model.SetScale(self.zoom)
+        try:
+            if not model.HasMocConsistencyFromFile(str(moc)):
+                raise ValueError("模型 moc3 未通过 SDK 完整性检查。")
+            model.LoadModelJson(str(model_json))
+            if not model.GetDrawableIds():
+                raise ValueError("模型没有可绘制的部件。")
+            model.SetAutoBlinkEnable(self._auto_blink)
+            model.SetAutoBreathEnable(self._auto_breath)
+            if abs(self.zoom - 1.0) > 1e-6:
+                model.SetScale(self.zoom)
+        except Exception:
+            self._destroy_renderer(model)
+            model = None  # do not retain a native model in the exception traceback
+            raise
         return model
+
+    @staticmethod
+    def _destroy_renderer(model):
+        # live2d-py 0.7 owns textures/buffers in the renderer. Its explicit
+        # teardown must happen before Python drops the last model reference.
+        if model is not None:
+            try:
+                model.DestroyRenderer()
+            except Exception as exc:
+                print(f"[live2d] 释放渲染资源失败：{exc}", file=sys.stderr)
+
+    def _cleanup_context(self):
+        """Also called before Qt replaces a context (for example window flags)."""
+        self._timer.stop()
+        self._startup_timer.stop()
+        self._ready = self._has_frame = False
+        self._reload_requested = False
+        if self.model is not None:
+            self.makeCurrent()
+            try:
+                self._destroy_renderer(self.model)
+                self.model = None
+            finally:
+                self.doneCurrent()
+
+    def _fail(self, stage: str, message: str):
+        if self._failed or self._stopped:
+            return
+        self._failed = True
+        self._ready = self._has_frame = False
+        self._reload_requested = False
+        self._timer.stop()
+        self._startup_timer.stop()
+        text = f"{stage}失败：{' '.join(message.split())[:240]}"
+        print(f"[live2d] {text}", file=sys.stderr)
+        # The owner uses a queued connection: never delete a GL widget from
+        # inside its initialize/resize/paint callback.
+        self.render_failed.emit(text)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not (self._stopped or self._failed or self._has_frame):
+            self._startup_timer.start(self.STARTUP_TIMEOUT_MS)
+
+    def hideEvent(self, event):
+        self._startup_timer.stop()
+        super().hideEvent(event)
+
+    def _startup_expired(self):
+        if self.isVisible() and not self._has_frame:
+            self._fail("显示", "未能建立 OpenGL 画面，请检查模型与显卡环境后重试。")
+
+    def closeEvent(self, event):
+        self.stop()
+        super().closeEvent(event)
 
     def resizeGL(self, w: int, h: int):
         # Resize 只在这里调 —— 这时才是真实尺寸
@@ -163,9 +271,11 @@ class Live2DWidget(QOpenGLWidget):
             try:
                 self.model.Resize(max(1, w), max(1, h))
             except Exception as e:                   # noqa: BLE001
-                print(f"[live2d] resize 失败：{e}", file=sys.stderr)
+                self._fail("调整画面", str(e))
 
     def paintGL(self):
+        if self._failed or self._stopped:
+            return
         if self._reload_requested and not self._reloading:
             self._reload_in_context()
         if not self._ready or self.model is None:
@@ -176,8 +286,12 @@ class Live2DWidget(QOpenGLWidget):
             # 全透明清屏，窗口的透明背景才透得出来
             live2d.clearBuffer(0.0, 0.0, 0.0, 0.0)
             self.model.Draw()
+            if not self._has_frame:
+                self._has_frame = True
+                self._startup_timer.stop()
+                self.render_ready.emit()
         except Exception as e:                       # noqa: BLE001
-            print(f"[live2d] 绘制失败：{e}", file=sys.stderr)
+            self._fail("绘制", str(e))
 
     def request_reload(self, model_json: str | Path | None = None) -> bool:
         """Queue a model reload for the next paint pass.
@@ -185,7 +299,8 @@ class Live2DWidget(QOpenGLWidget):
         Live2D model loading touches OpenGL resources, so callers must never invoke
         ``LoadModelJson`` directly from a menu or worker callback.
         """
-        if not HAS_LIVE2D or not self._ready:
+        if (not HAS_LIVE2D or not self._ready or self._failed or self._stopped
+                or self._reload_requested or self._reloading):
             return False
         if model_json is not None:
             self._reload_path = str(model_json)
@@ -196,22 +311,27 @@ class Live2DWidget(QOpenGLWidget):
     def _reload_in_context(self):
         self._reload_requested = False
         self._reloading = True
-        old_model = self.model
+        new_model = None
         try:
             new_model = self._load_model(self._reload_path)
+            new_model.Resize(max(1, self.width()), max(1, self.height()))
+            new_model.Update()
+            live2d.clearBuffer(0.0, 0.0, 0.0, 0.0)
+            new_model.Draw()
+        except Exception as e:                       # noqa: BLE001
+            # The old model is untouched until the candidate can draw a frame.
+            self._destroy_renderer(new_model)
+            new_model = None
+            message = str(e)
+            print(f"[live2d] 重载失败：{message}", file=sys.stderr)
+            self.reload_finished.emit(False, message)
+        else:
+            self._destroy_renderer(self.model)
             self.model = new_model
-            self.model.Resize(max(1, self.width()), max(1, self.height()))
             self.model_json = self._reload_path
             self._ready = True
             self.reload_finished.emit(True, self.model_json)
             QTimer.singleShot(0, self.play_idle)
-        except Exception as e:                       # noqa: BLE001
-            # Keep the old model alive when a replacement is invalid.
-            self.model = old_model
-            self._ready = old_model is not None
-            message = str(e)
-            print(f"[live2d] 重载失败：{message}", file=sys.stderr)
-            self.reload_finished.emit(False, message)
         finally:
             self._reloading = False
 
@@ -394,7 +514,9 @@ class Live2DWidget(QOpenGLWidget):
         return "Body"
 
     def stop(self):
-        self._timer.stop()
+        """Permanently stop this widget; retry uses a fresh Qt/OpenGL context."""
+        self._stopped = True
+        self._cleanup_context()
 
     # ---------------------------------------------------------- 思考强度的可视化
 

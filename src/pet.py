@@ -229,10 +229,12 @@ except ImportError:
 # Live2D。这个 import 有副作用：它会调 live2d.init()，
 # 而那必须在 QApplication 创建之前发生 —— 所以不能挪到函数里。
 try:
-    from live2d_widget import Live2DWidget, HAS_LIVE2D, make_transparent_gl
+    from live2d_widget import (Live2DWidget, HAS_LIVE2D, LIVE2D_ERROR,
+                              make_transparent_gl, validate_model_files)
 except Exception as _e:                     # noqa: BLE001
     Live2DWidget = None
     HAS_LIVE2D = False
+    LIVE2D_ERROR = str(_e)
     make_transparent_gl = None
 
 L2D_CFG = M.CFG.get("live2d", {})
@@ -242,7 +244,7 @@ def live2d_ready() -> bool:
     """Live2D 是否可用且启用。"""
     if not (HAS_LIVE2D and L2D_CFG.get("enabled", False)):
         return False
-    return (M.ROOT / L2D_CFG.get("model", "")).exists()
+    return (M.ROOT / L2D_CFG.get("model", "")).is_file()
 
 
 # ★ 等 worker 收尾的上限（秒）。超了就走 os._exit，不再等 ——
@@ -912,33 +914,10 @@ class PetWindow(QWidget):
         self.setWindowTitle("小日和")
         self.setMouseTracking(True)
 
-        # 尺寸：Live2D 是竖构图（Hiyori 画布 1:1.403），静态图是正方形
-        if live2d_ready():
-            w = int(L2D_CFG.get("width", 260))
-            h = int(L2D_CFG.get("height", 380))
-        else:
-            w = h = CHAR_SIZE
-        self.setFixedSize(w, h)
-
-        # 角色本体：Live2D 或静态图
+        self.setFixedSize(CHAR_SIZE, CHAR_SIZE)
         self.gl: Live2DWidget | None = None
-        if live2d_ready():
-            model_path = M.ROOT / L2D_CFG["model"]
-            self.gl = Live2DWidget(
-                model_path, self,
-                zoom=float(L2D_CFG.get("zoom", 1.0)),
-                fps=int(L2D_CFG.get("fps", 30)),
-                auto_blink=bool(L2D_CFG.get("auto_blink", True)),
-                auto_breath=bool(L2D_CFG.get("auto_breath", True)),
-                idle_group=str(L2D_CFG.get("idle_group", "Idle")),
-            )
-            self.gl.setGeometry(0, 0, w, h)
-            self.gl.clicked.connect(self._on_model_clicked)
-            self.gl.drag_finished.connect(self._on_dragged)
-            self.gl.hovered.connect(self._on_model_hover)
-            self.gl.reload_finished.connect(self._on_reload_finished)
-            # 启动后把当前档位的表情应用上
-            QTimer.singleShot(1200, lambda: self._sync_model_pose())
+        self._live2d_error = ""
+        self._announce_live2d_ready = False
 
         # 气泡是独立窗口 —— Live2D 是 OpenGL 绘制，会盖住同窗口内的 QPainter 内容
         self.bubble_win: BubbleWindow | None = None
@@ -948,10 +927,13 @@ class PetWindow(QWidget):
         self.proxy_url: str = ""
         self.prober: ProxyProbe | None = None
         self.updater: UpdateCheck | None = None
-        self._restore_pos()
         self._watch_config()
         self.companion = CompanionController(self)
         self.appearance = Appearance(ROOT, self)
+        # All controllers must exist before a renderer can report a failure.
+        if L2D_CFG.get("enabled", False):
+            self._start_live2d()
+        self._restore_pos()
 
     # ---------------------------------------------------------- 代理
 
@@ -1293,8 +1275,8 @@ class PetWindow(QWidget):
             a.triggered.connect(callback)
         advanced.addAction("重新检测代理", lambda: self.probe_proxy(announce=True))
         advanced.addAction("检查更新", self._check_update)
-        if self.gl:
-            advanced.addAction("重载 Live2D 模型", self._reload_model)
+        if L2D_CFG.get("enabled", False):
+            advanced.addAction("重载 Live2D 模型" if self.gl else "重试 Live2D", self._reload_model)
         advanced.addAction("打开配置文件", self._open_config)
         m.addSeparator()
         m.addAction("退出", self.quit_safely)
@@ -1358,6 +1340,7 @@ class PetWindow(QWidget):
         if getattr(self, "_quitting", False):
             os._exit(0)                     # 第二次点 = 不等了
         self._quitting = True
+        self._stop_live2d()
         if self.chat:
             self.chat.prepare_quit()
 
@@ -1422,19 +1405,110 @@ class PetWindow(QWidget):
 
     def _reload_model(self):
         """重载 Live2D 模型 —— 换了模型文件之后用。"""
+        if not L2D_CFG.get("enabled", False):
+            self.show_bubble("配置中已关闭 Live2D。")
+            return
         if self.gl is None:
-            self.show_bubble("当前是静态图模式。")
+            self._start_live2d(announce=True)
             return
         if not self.gl.request_reload(M.ROOT / L2D_CFG["model"]):
-            self.show_bubble("模型还没准备好。")
+            self.show_bubble("模型正在准备，稍后再试。")
             return
         self.show_bubble("正在换模型…", 1800)
 
     def _on_reload_finished(self, success: bool, message: str):
+        if self.sender() is not self.gl or self.gl is None or not self.gl._ready:
+            return
         if success:
+            self._sync_live2d_state()
             self.show_bubble("换好了。")
         else:
-            self.show_bubble(f"换模型失败：{message}")
+            self.show_bubble(f"换模型失败，继续使用原模型：{message}")
+
+    def _start_live2d(self, announce: bool = False):
+        """Recreate the child after failure; never reuse a failed GL context."""
+        if self.gl is not None:
+            return
+        self._announce_live2d_ready = announce
+        try:
+            if not HAS_LIVE2D:
+                raise RuntimeError(f"Live2D 依赖不可用，修复环境后需重启。{LIVE2D_ERROR}")
+            model_path = M.ROOT / L2D_CFG.get("model", "")
+            validate_model_files(model_path)
+            w, h = int(L2D_CFG.get("width", 260)), int(L2D_CFG.get("height", 380))
+            if w <= 0 or h <= 0:
+                raise ValueError("Live2D 宽高必须为正数。")
+            self.gl = Live2DWidget(
+                model_path, self,
+                zoom=float(L2D_CFG.get("zoom", 1.0)),
+                fps=int(L2D_CFG.get("fps", 30)),
+                auto_blink=bool(L2D_CFG.get("auto_blink", True)),
+                auto_breath=bool(L2D_CFG.get("auto_breath", True)),
+                idle_group=str(L2D_CFG.get("idle_group", "Idle")),
+            )
+            self.gl.clicked.connect(self._on_model_clicked)
+            self.gl.drag_finished.connect(self._on_dragged)
+            self.gl.hovered.connect(self._on_model_hover)
+            # Queued slots run after the native GL callback has returned.
+            self.gl.render_failed.connect(self._on_live2d_failed, Qt.QueuedConnection)
+            self.gl.render_ready.connect(self._on_live2d_ready, Qt.QueuedConnection)
+            self.gl.reload_finished.connect(self._on_reload_finished, Qt.QueuedConnection)
+            self.setFixedSize(w, h)
+            self.gl.setGeometry(0, 0, w, h)
+            self.gl.show()
+            if announce:
+                self.show_bubble("正在恢复 Live2D…", 1800)
+        except Exception as exc:
+            self._fallback_live2d(str(exc))
+
+    def _on_live2d_failed(self, message: str):
+        if self.sender() is self.gl and self.gl is not None:
+            self._fallback_live2d(message)
+
+    def _on_live2d_ready(self):
+        if self.sender() is not self.gl or self.gl is None or not self.gl._ready:
+            return
+        self._live2d_error = ""
+        self._sync_live2d_state()
+        if self._announce_live2d_ready:
+            self.show_bubble("Live2D 已恢复。")
+        self._announce_live2d_ready = False
+
+    def _sync_live2d_state(self):
+        self._sync_model_pose()
+        self.gl.set_quiet(self.companion._quiet)
+        self.gl.set_activity(self.companion._activity)
+
+    def _fallback_live2d(self, message: str):
+        failed, self.gl = self.gl, None
+        if failed is not None:
+            try:
+                failed.stop()
+            except Exception as exc:
+                print(f"[live2d] 停止故障组件失败：{exc}", file=sys.stderr)
+            failed.hide()
+            failed.deleteLater()
+        self._live2d_error = " ".join(message.split())[:240]
+        self._announce_live2d_ready = False
+        if self.pix.isNull():
+            self.pix = draw_placeholder()  # keep a damaged custom PNG untouched
+        self.setFixedSize(CHAR_SIZE, CHAR_SIZE)
+        # An error fallback must remain reachable even after click-through.
+        if self.state.get("click_through", False):
+            self.state["click_through"] = False
+            try:
+                save_state(self.state)
+            except OSError as exc:
+                print(f"[live2d] 无法保存恢复点击状态：{exc}", file=sys.stderr)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.setCursor(Qt.ArrowCursor)
+        self.update()
+        self.show_bubble(f"Live2D 暂不可用，已显示静态形象。{self._live2d_error}\n"
+                         "修复后可在右键高级菜单或托盘重试。", 6000)
+
+    def _stop_live2d(self):
+        if self.gl is not None:
+            self.gl.stop()
 
     def _open_persona_manager(self):
         from persona_ui import open_persona_manager
@@ -1473,7 +1547,7 @@ class PetWindow(QWidget):
 
 def main() -> None:
     # ★ 必须在 QApplication 之前 —— 设成兼容模式，否则 Live2D 什么都不画
-    if make_transparent_gl and live2d_ready():
+    if make_transparent_gl:
         make_transparent_gl()
 
     app = QApplication(sys.argv)
@@ -1487,6 +1561,7 @@ def main() -> None:
         QMessageBox.information(None, "小日和", "桌宠已经运行，可以从托盘打开对话。")
         return
     pet = PetWindow()
+    app.aboutToQuit.connect(pet._stop_live2d)
     pet.show()
     from PySide6.QtWidgets import QSystemTrayIcon
     app.setQuitOnLastWindowClosed(False)
@@ -1495,6 +1570,8 @@ def main() -> None:
         tray_menu = ThemeMenu(pet.appearance, pet, heading=True)
         tray_menu.addAction("打开对话", pet.open_chat)
         tray_menu.addAction("显示桌宠 / 恢复点击", pet.reveal)
+        if L2D_CFG.get("enabled", False):
+            tray_menu.addAction("重试 / 重载 Live2D", pet._reload_model)
         add_appearance_menu(tray_menu, pet.appearance)
         tray_menu.addAction("退出", pet.quit_safely)
         pet.tray.setContextMenu(tray_menu)

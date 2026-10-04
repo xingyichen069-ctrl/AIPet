@@ -94,7 +94,7 @@ class AppearanceTests(unittest.TestCase):
         #   （"'QWidget' object has no attribute ..."）看不出是漏桩，像代码坏了。
         for name in ('open_chat', '_start_company', '_open_memory_view', '_show_people',
                      '_toggle_panel', '_set_level', '_toggle_click_through', '_toggle_topmost',
-                     '_toggle_focus_timer', 'probe_proxy', '_check_update',
+                     '_toggle_focus_timer', 'probe_proxy', '_check_update', '_reload_model',
                      '_open_config', '_open_persona_manager', 'quit_safely'):
             setattr(pet, name, Mock())
         with patch('pet.QQ_STATUS', return_value={'label': 'QQ 未连接', 'state': 'off'}), patch('pet.T.load', return_value={}):
@@ -107,6 +107,9 @@ class AppearanceTests(unittest.TestCase):
         advanced = actions['高级'].menu()
         self.assertIsInstance(advanced, ThemeMenu)
         self.assertIsInstance(advanced.actions()[1].menu(), ThemeMenu)
+        recovery = next(a for a in advanced.actions() if a.text() == '重试 Live2D')
+        recovery.trigger()
+        pet._reload_model.assert_called_once()
         actions['退出'].trigger()
         pet.quit_safely.assert_called_once()
         menu.deleteLater()
