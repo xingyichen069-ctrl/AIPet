@@ -40,6 +40,7 @@ live2d_widget.py —— 把 Live2D 模型画进 Qt 窗口
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 import sys
 import time
 from pathlib import Path
@@ -125,6 +126,9 @@ class Live2DWidget(QOpenGLWidget):
     reload_finished = Signal(bool, str)  # (success, message)
     render_ready = Signal()       # first successful draw in the current context
     render_failed = Signal(str)   # emitted once; the owner switches to a static pet
+    drag_changed = Signal(bool)
+    action_ended = Signal(int, int, bool)  # skin epoch, action token, successful completion
+    presentation_notice = Signal(str)
     STARTUP_TIMEOUT_MS = 5000
 
     def __init__(self, model_json: str | Path, parent: QWidget | None = None,
@@ -143,6 +147,10 @@ class Live2DWidget(QOpenGLWidget):
         self._has_frame = False
         self._failed = False
         self._stopped = False
+        self._presentation = None
+        self._performance_profile = None
+        self._performance_adapter = None
+        self._awaiting_presentation_epoch = None
         self._press_pos = None
         self._press_global_pos = None
         self._win_off = None       # 拖动时记录的窗口偏移
@@ -175,6 +183,8 @@ class Live2DWidget(QOpenGLWidget):
     def initializeGL(self):
         if self._stopped or self._failed:
             return
+        if self._presentation is not None:
+            self._awaiting_presentation_epoch = self._presentation["epoch"]
         context = self.context()
         if context is not None:
             context.aboutToBeDestroyed.connect(self._cleanup_context)
@@ -226,6 +236,8 @@ class Live2DWidget(QOpenGLWidget):
         self._startup_timer.stop()
         self._ready = self._has_frame = False
         self._reload_requested = False
+        if self._performance_adapter is not None:
+            self._performance_adapter.reset()
         if self.model is not None:
             self.makeCurrent()
             try:
@@ -281,8 +293,18 @@ class Live2DWidget(QOpenGLWidget):
         if not self._ready or self.model is None:
             return
         try:
+            presentation = self._presentation
+            if presentation is not None and self._awaiting_presentation_epoch is not None:
+                # A newly created native model must not consume the previous
+                # generation's action while its queued ready signal is pending.
+                presentation = {**presentation, "layer": "unavailable", "action": None}
+            if presentation is not None:
+                self._performance_adapter.before_update(self.model, presentation, self._performance_profile)
             self.model.Update()
-            self._apply_activity()
+            if presentation is not None:
+                self._performance_adapter.after_update(self.model, presentation, self._performance_profile)
+            else:
+                self._apply_activity()
             # 全透明清屏，窗口的透明背景才透得出来
             live2d.clearBuffer(0.0, 0.0, 0.0, 0.0)
             self.model.Draw()
@@ -330,6 +352,8 @@ class Live2DWidget(QOpenGLWidget):
             self.model = new_model
             self.model_json = self._reload_path
             self._ready = True
+            if self._presentation is not None:
+                self._awaiting_presentation_epoch = self._presentation["epoch"]
             self.reload_finished.emit(True, self.model_json)
             QTimer.singleShot(0, self.play_idle)
         finally:
@@ -337,10 +361,25 @@ class Live2DWidget(QOpenGLWidget):
 
     # ---------------------------------------------------------- 交互
 
+    def set_presentation(self, state, profile):
+        """Receive data only; all model/GL work stays inside paintGL."""
+        if self._performance_adapter is None:
+            from performance_live2d import Live2DAdapter
+            self._performance_adapter = Live2DAdapter(self.action_ended.emit, self.presentation_notice.emit)
+        self._presentation = deepcopy(state)
+        self._performance_profile = profile
+        if self._awaiting_presentation_epoch is not None and state["epoch"] != self._awaiting_presentation_epoch:
+            self._awaiting_presentation_epoch = None
+        self._quiet = state["quiet"]
+        self._timer.setInterval(125 if state["quiet"] or state["suspended"] else self._normal_interval)
+        self.update()
+
     def play_idle(self):
         self.play(self.idle_group, priority=3)
 
     def play(self, group: str | None = None, priority: int = 2):
+        if self._presentation is not None:
+            return  # the scheduler owns motions while attached
         if self._ready and self.model and not self._quiet:
             try:
                 self.model.StartRandomMotion(group or self.idle_group, priority)
@@ -348,6 +387,8 @@ class Live2DWidget(QOpenGLWidget):
                 pass
 
     def set_quiet(self, quiet):
+        if self._presentation is not None:
+            return
         self._quiet = bool(quiet)
         self._timer.setInterval(125 if quiet else self._normal_interval)
         if quiet and self._ready and self.model:
@@ -359,6 +400,8 @@ class Live2DWidget(QOpenGLWidget):
             self.play_idle()
 
     def set_activity(self, state):
+        if self._presentation is not None:
+            return
         self._activity = state
         if state == "done":
             self.play("Tap@Body", priority=3)
@@ -427,6 +470,8 @@ class Live2DWidget(QOpenGLWidget):
                 delta = e.globalPosition().toPoint() - self._press_global_pos
                 self._drag_dist = max(self._drag_dist, int((delta.x() ** 2 + delta.y() ** 2) ** 0.5))
             if self._drag_dist >= 8:
+                if not self._dragging:
+                    self.drag_changed.emit(True)
                 self._dragging = True
         elif self._ready and self.model:
             try:
@@ -476,6 +521,7 @@ class Live2DWidget(QOpenGLWidget):
 
         if self._dragging or dist >= 8:
             self._dragging = False
+            self.drag_changed.emit(False)
             self._suppress_double_click_until = time.monotonic() + 0.25
             self.drag_finished.emit()
             e.accept()
@@ -527,7 +573,7 @@ class Live2DWidget(QOpenGLWidget):
         这是"人格可视化"的一部分：调到深究时它会真的有反应，
         而不是只有面板上的数字变了。
         """
-        if not (self._ready and self.model):
+        if self._presentation is not None or not (self._ready and self.model):
             return
         presets = {
             # 眼睛开合：想得越深，眼睛越眯（在琢磨）

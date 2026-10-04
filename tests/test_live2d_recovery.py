@@ -98,6 +98,7 @@ class RendererRecovery(unittest.TestCase):
         self.widget.stop()
         self.widget.deleteLater()
         APP.processEvents()
+        APP.sendPostedEvents(None, QEvent.DeferredDelete)
 
     def healthy(self):
         model = Mock()
@@ -216,6 +217,33 @@ class RendererRecovery(unittest.TestCase):
             self.widget.initializeGL()
         load.assert_not_called()
 
+    def test_new_native_model_waits_for_new_epoch_before_using_cached_action(self):
+        from performance import Engine
+        from performance_profile import load_profile
+        profile = load_profile("hiyori")
+        engine = Engine(profile)
+        engine.dispatch({"kind": "action.request", "action": "greet", "source": "user"}, 0)
+        self.widget.set_presentation(engine.snapshot(), profile)
+        adapter = self.widget._performance_adapter = Mock()
+        self.healthy()
+        self.assertEqual(adapter.before_update.call_args.args[1]["layer"], "unavailable")
+        # Same-epoch progress updates cannot accidentally release the gate.
+        self.widget.set_presentation(engine.snapshot(), profile)
+        self.widget.paintGL()
+        self.assertIsNone(adapter.before_update.call_args.args[1]["action"])
+        engine.dispatch({"kind": "renderer.set", "value": True}, 1)
+        engine.dispatch({"kind": "action.request", "action": "greet", "source": "user"}, 1)
+        self.widget.set_presentation(engine.snapshot(), profile)
+        self.widget.paintGL()
+        self.assertEqual(adapter.before_update.call_args.args[1]["layer"], "action")
+        with patch.object(self.widget, "_load_model", return_value=Mock()):
+            self.widget.request_reload("replacement.model3.json")
+            self.widget.paintGL()
+        self.assertEqual(adapter.before_update.call_args.args[1]["layer"], "unavailable")
+        self.widget._cleanup_context()
+        self.healthy()
+        self.assertEqual(adapter.before_update.call_args.args[1]["layer"], "unavailable")
+
 
 class FakeRenderer(QWidget):
     clicked = Signal(str)
@@ -224,6 +252,9 @@ class FakeRenderer(QWidget):
     render_ready = Signal()
     render_failed = Signal(str)
     reload_finished = Signal(bool, str)
+    drag_changed = Signal(bool)
+    action_ended = Signal(int, int, bool)
+    presentation_notice = Signal(str)
 
     def __init__(self, path, parent, **kwargs):
         super().__init__(parent)
@@ -233,6 +264,7 @@ class FakeRenderer(QWidget):
         self.set_activity = Mock()
         self.request_reload = Mock(return_value=True)
         self.play_idle = Mock()
+        self.set_presentation = Mock()
 
 
 class BarePet(P.PetWindow):
@@ -279,6 +311,7 @@ class PetRecovery(unittest.TestCase):
         self.pet.hide()
         self.pet.deleteLater()
         APP.processEvents()
+        APP.sendPostedEvents(None, QEvent.DeferredDelete)
 
     def test_queued_failure_restores_visible_clickable_static_pet_and_retry(self):
         self.pet._start_live2d()

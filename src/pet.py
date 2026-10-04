@@ -918,6 +918,10 @@ class PetWindow(QWidget):
         self.gl: Live2DWidget | None = None
         self._live2d_error = ""
         self._announce_live2d_ready = False
+        from performance_profile import load_profile
+        from performance_runtime import PerformanceRuntime
+        self.performance = PerformanceRuntime(load_profile("hiyori"), self)
+        self.performance.changed.connect(self._apply_performance)
 
         # 气泡是独立窗口 —— Live2D 是 OpenGL 绘制，会盖住同窗口内的 QPainter 内容
         self.bubble_win: BubbleWindow | None = None
@@ -1112,6 +1116,9 @@ class PetWindow(QWidget):
         if not (self.gl and L2D_CFG.get("animate_thinking", True)):
             return
         r = T.resolve()
+        if getattr(self, "performance", None) is not None:
+            self.performance.send("level.set", level=r["level"])
+            return
         self.gl.apply_thinking_pose(r["level"])
 
     def _on_model_hover(self, entered: bool):
@@ -1120,7 +1127,7 @@ class PetWindow(QWidget):
             return
         if entered and not self.companion._quiet:
             # 只给动作，不弹气泡 —— 每次经过都说话会很吵
-            self.gl.play("Flick", priority=1)
+            self._request_presentation_action("react", "Flick", 1)
 
     def _on_model_clicked(self, area: str):
         """点模型的头或身体 —— 给个反应，让它像活的。"""
@@ -1129,12 +1136,12 @@ class PetWindow(QWidget):
         if area == "Head":
             self._ensure_bubble().show_text("别戳头。", 1500)
             if self.gl:
-                self.gl.play("Flick", priority=3)
+                self._request_presentation_action("react", "Flick", 3, source="user")
             return
 
         if area == "Body":
             if self.gl:
-                self.gl.play("Tap@Body", priority=3)
+                self._request_presentation_action("acknowledge", "Tap@Body", 3, source="user")
             self._toggle_panel()
             return
 
@@ -1159,6 +1166,8 @@ class PetWindow(QWidget):
             if self._press_pos is not None:
                 delta = e.globalPosition().toPoint() - self._press_pos
                 if self._dragging or delta.manhattanLength() >= QApplication.startDragDistance():
+                    if not self._dragging:
+                        self._performance_event("drag.begin")
                     self._dragging = True
                     self.dragged = True
             self.move(e.globalPosition().toPoint() - self.drag_from)
@@ -1168,6 +1177,7 @@ class PetWindow(QWidget):
     def mouseReleaseEvent(self, e):
         if e.button() == Qt.LeftButton:
             if self._dragging or self.dragged:
+                self._performance_event("drag.end")
                 self._persist()
                 self._suppress_double_click_until = time.monotonic() + 0.25
             elif self._body_at(e.position()):
@@ -1453,6 +1463,11 @@ class PetWindow(QWidget):
             self.gl.render_failed.connect(self._on_live2d_failed, Qt.QueuedConnection)
             self.gl.render_ready.connect(self._on_live2d_ready, Qt.QueuedConnection)
             self.gl.reload_finished.connect(self._on_reload_finished, Qt.QueuedConnection)
+            self.gl.drag_changed.connect(self._on_presentation_drag)
+            self.gl.action_ended.connect(self._on_action_ended, Qt.QueuedConnection)
+            self.gl.presentation_notice.connect(self._on_presentation_notice, Qt.QueuedConnection)
+            if getattr(self, "performance", None) is not None:
+                self.gl.set_presentation(self.performance.engine.snapshot(), self.performance.engine.profile)
             self.setFixedSize(w, h)
             self.gl.setGeometry(0, 0, w, h)
             self.gl.show()
@@ -1475,12 +1490,18 @@ class PetWindow(QWidget):
         self._announce_live2d_ready = False
 
     def _sync_live2d_state(self):
+        if getattr(self, "performance", None) is not None:
+            self.performance.send("renderer.set", value=True)
+            self.performance.send("quiet.set", value=self.companion._quiet)
+            self._sync_model_pose()
+            return
         self._sync_model_pose()
         self.gl.set_quiet(self.companion._quiet)
         self.gl.set_activity(self.companion._activity)
 
     def _fallback_live2d(self, message: str):
         failed, self.gl = self.gl, None
+        self._performance_event("renderer.set", value=False)
         if failed is not None:
             try:
                 failed.stop()
@@ -1507,8 +1528,37 @@ class PetWindow(QWidget):
                          "修复后可在右键高级菜单或托盘重试。", 6000)
 
     def _stop_live2d(self):
+        if getattr(self, "performance", None) is not None:
+            self.performance.close()
         if self.gl is not None:
             self.gl.stop()
+
+    def _performance_event(self, kind, **fields):
+        runtime = getattr(self, "performance", None)
+        if runtime is not None:
+            return runtime.send(kind, **fields)
+
+    def _apply_performance(self, state, profile):
+        if self.gl is not None:
+            self.gl.set_presentation(state, profile)
+
+    def _on_presentation_drag(self, dragging):
+        if self.sender() is self.gl and self.gl is not None:
+            self._performance_event("drag.begin" if dragging else "drag.end")
+
+    def _on_action_ended(self, epoch, token, success):
+        if self.sender() is self.gl and self.gl is not None:
+            self._performance_event("action.end", epoch=epoch, token=token, success=success)
+
+    def _on_presentation_notice(self, message):
+        if self.sender() is self.gl and self.gl is not None:
+            print(f"[performance] {message}", file=sys.stderr)
+
+    def _request_presentation_action(self, name, legacy_group, legacy_priority, *, source="system"):
+        if getattr(self, "performance", None) is not None:
+            self.performance.send("action.request", action=name, source=source)
+        elif self.gl is not None:
+            self.gl.play(legacy_group, priority=legacy_priority)
 
     def _open_persona_manager(self):
         from persona_ui import open_persona_manager

@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "id": "hiyori",
+  "label": "Hiyori 现有能力",
+  "renderer": "live2d",
+  "parameters": {
+    "ParamEyeLOpen": {"min": 0, "max": 1, "default": 1},
+    "ParamEyeROpen": {"min": 0, "max": 1, "default": 1},
+    "ParamAngleZ": {"min": -30, "max": 30, "default": 0},
+    "ParamMouthForm": {"min": -1, "max": 1, "default": 0}
+  },
+  "moods": {
+    "calm": {},
+    "happy": {"ParamMouthForm": 0.6},
+    "sad": {"ParamEyeLOpen": 0.75, "ParamEyeROpen": 0.75, "ParamMouthForm": -0.4},
+    "curious": {"ParamAngleZ": 5},
+    "worried": {"ParamAngleZ": -3, "ParamMouthForm": -0.25}
+  },
+  "activities": {
+    "idle": {},
+    "thinking": {"ParamEyeLOpen": 0.82, "ParamEyeROpen": 0.82, "ParamAngleZ": 4},
+    "searching": {"ParamEyeLOpen": 0.92, "ParamEyeROpen": 0.92, "ParamAngleZ": -5},
+    "replying": {"ParamAngleZ": 1.5},
+    "done": {"ParamAngleZ": -2},
+    "error": {"ParamEyeLOpen": 0.85, "ParamEyeROpen": 0.85, "ParamAngleZ": 2}
+  },
+  "levels": {
+    "frugal": {"ParamEyeLOpen": 1, "ParamEyeROpen": 1, "ParamAngleZ": 0},
+    "daily": {"ParamEyeLOpen": 1, "ParamEyeROpen": 1, "ParamAngleZ": 0},
+    "serious": {"ParamEyeLOpen": 0.85, "ParamEyeROpen": 0.85, "ParamAngleZ": 3},
+    "deep": {"ParamEyeLOpen": 0.7, "ParamEyeROpen": 0.7, "ParamAngleZ": 6},
+    "max": {"ParamEyeLOpen": 0.55, "ParamEyeROpen": 0.55, "ParamAngleZ": 9}
+  },
+  "idle_motion": {"group": "Idle", "index": 0},
+  "actions": {
+    "greet": {"duration_ms": 1900, "motion": {"group": "Tap", "index": 0}},
+    "acknowledge": {"duration_ms": 1600, "motion": {"group": "Tap@Body", "index": 0}},
+    "react": {"duration_ms": 4200, "motion": {"group": "Flick", "index": 0}}
+  }
+}

@@ -375,6 +375,8 @@ class ChatWindow(QWidget):
         self._save_timer.setInterval(250)
         self._save_timer.timeout.connect(self._flush_ui)
         self.worker = None
+        self._performance_turn = None
+        self._reply_done = False
         self.attachment = None
         self._attachment_serial = 0
         self._attachment_pending = None
@@ -904,6 +906,7 @@ class ChatWindow(QWidget):
     def send_or_stop(self):
         if self.busy():
             self.stopping = True
+            self.pet.companion.activity('cancelled', self._performance_turn)
             self.emblem.finish(success=False)
             self.worker.requestInterruption()
             self.btn.setEnabled(False)
@@ -960,6 +963,7 @@ class ChatWindow(QWidget):
         self._start(m['context'], self.store.history(m['text']))
 
     def _start(self, query, history):
+        self._reply_done = False
         self.had_error = self.stopping = False
         self.cur_reply = []
         self.cur_bubble = None
@@ -971,7 +975,7 @@ class ChatWindow(QWidget):
         self._scroll_bottom(force=True)
         self.head.setText('正在想…')
         self.emblem.start_waiting()
-        self.pet.companion.activity('thinking')
+        self._performance_turn = self.pet.companion.begin_turn()
         self.worker = self.worker_cls(query, history)
         self.worker.memory_message_id = "__ephemeral__" if self.ephemeral else self.current_id
         self.worker.chunk.connect(self.on_chunk)
@@ -979,25 +983,30 @@ class ChatWindow(QWidget):
         self.worker.start()
 
     def on_chunk(self, kind, text):
-        if self.stopping:
+        if ((self.sender() is not None and self.sender() is not self.worker)
+                or self.stopping or self._reply_done or self._closing_application):
             return
+        if kind in ('content', 'reasoning', 'tool'):
+            phase = {'content': 'replying', 'reasoning': 'thinking', 'tool': 'searching'}[kind]
+            self.pet.companion.activity(phase, self._performance_turn)
         if kind == 'content':
             if self.cur_bubble is None:
                 self.cur_bubble = self.add_bubble('')
-                self.pet.companion.activity('replying')
             self.cur_reply.append(text)
             self.cur_bubble.setText(''.join(self.cur_reply))
             self._scroll_bottom()
             self.head.setText('正在说…')
         elif kind == 'tool':
             self.head.setText('正在处理…')
-            self.pet.companion.activity('searching')
         elif kind == 'error':
             self.had_error = True
             self.emblem.finish(success=False)
             self.add_bubble(text, 'sys')
 
     def on_done(self):
+        if (self.sender() is not None and self.sender() is not self.worker) or self._reply_done:
+            return
+        self._reply_done = True
         reply = ''.join(self.cur_reply)
         state = 'cancelled' if self.stopping else 'failed' if self.had_error or not reply else 'complete'
         if self.current_id:
@@ -1020,7 +1029,8 @@ class ChatWindow(QWidget):
         self.input.setEnabled(True)
         self.attach_btn.setEnabled(True)
         self.retry.setVisible(state != 'complete' and self.current_id is not None)
-        self.pet.companion.activity('done' if state == 'complete' else 'error')
+        self.pet.companion.activity('done' if state == 'complete' else
+                                    'cancelled' if state == 'cancelled' else 'error', self._performance_turn)
         self.emblem.finish(success=state == 'complete')
         self.pet.companion.tick()
         self.refresh_head()
@@ -1087,6 +1097,8 @@ class CompanionController:
         self.counter.setStyleSheet('background:#e9f3ef;color:#466458;border-radius:8px;padding:6px 10px;font-size:12px;')
         self._quiet = False
         self._activity = 'idle'
+        self._turn_id = 0
+        self._turn_open = False
         self.timer = QTimer(pet)
         self.timer.timeout.connect(self.tick)
         self.timer.start(1000)
@@ -1116,7 +1128,9 @@ class CompanionController:
                 self.pet.panel.fade_out()
                 if self.pet.bubble_win:
                     self.pet.bubble_win.hide()
-            if self.pet.gl:
+            if getattr(self.pet, 'performance', None) is not None:
+                self.pet.performance.send('quiet.set', value=quiet)
+            elif self.pet.gl:
                 self.pet.gl.set_quiet(quiet)
         if f and self.pet.state.get('show_focus_timer', True) and not self.popup.isVisible():
             seconds = max(0, math.ceil(f['due']-time.time()))
@@ -1130,14 +1144,42 @@ class CompanionController:
             self.pet.chat.emblem.set_quiet(quiet)
             self.pet.chat.refresh_head()
 
-    def activity(self, state):
+    def begin_turn(self):
+        runtime = getattr(self.pet, 'performance', None)
+        self._turn_id = runtime.begin_turn() if runtime is not None else self._turn_id + 1
+        self._turn_open = True
+        self._activity = 'thinking'
+        if runtime is None and self.pet.gl and not self._quiet:
+            self.pet.gl.set_activity('thinking')
+        return self._turn_id
+
+    def activity(self, state, turn_id=None):
+        if turn_id is not None and (turn_id != self._turn_id or not self._turn_open):
+            return
+        runtime = getattr(self.pet, 'performance', None)
+        if runtime is not None:
+            token = self._turn_id if turn_id is None else turn_id
+            if state in ('thinking', 'searching', 'replying'):
+                result = runtime.send('turn.phase', turn_id=token, phase=state)
+            else:
+                outcome = {'done': 'complete', 'error': 'error', 'cancelled': 'cancelled'}.get(state)
+                if outcome is None:
+                    return
+                result = runtime.send('turn.end', turn_id=token, outcome=outcome)
+            if not result['accepted']:
+                return
+        if state in ('done', 'error', 'cancelled'):
+            self._turn_open = False
         if state == self._activity:
             return
+        state = 'idle' if state == 'cancelled' else state
         self._activity = state
-        if self.pet.gl and not self._quiet:
+        if runtime is None and self.pet.gl and not self._quiet:
             self.pet.gl.set_activity(state)
-        if state in ('done', 'error'):
-            QTimer.singleShot(1800, lambda: self.activity('idle') if self._activity == state else None)
+        if runtime is None and state in ('done', 'error'):
+            generation = self._turn_id
+            QTimer.singleShot(1800, lambda: self.activity('idle')
+                              if self._activity == state and self._turn_id == generation else None)
 
     def stop_focus(self):
         f = self.store.focus()

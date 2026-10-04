@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "id": "simulator",
+  "label": "模拟角色（含喝茶示意）",
+  "renderer": "simulation",
+  "parameters": {
+    "ParamEyeLOpen": {"min": 0, "max": 1, "default": 1},
+    "ParamEyeROpen": {"min": 0, "max": 1, "default": 1},
+    "ParamAngleZ": {"min": -30, "max": 30, "default": 0},
+    "ParamMouthForm": {"min": -1, "max": 1, "default": 0}
+  },
+  "moods": {
+    "calm": {}, "happy": {"ParamMouthForm": 0.6},
+    "sad": {"ParamEyeLOpen": 0.7, "ParamEyeROpen": 0.7, "ParamMouthForm": -0.4},
+    "curious": {"ParamAngleZ": 8}, "worried": {"ParamAngleZ": -5, "ParamMouthForm": -0.25}
+  },
+  "activities": {
+    "idle": {}, "thinking": {"ParamAngleZ": 6, "ParamEyeLOpen": 0.8, "ParamEyeROpen": 0.8},
+    "searching": {"ParamAngleZ": -6}, "replying": {"ParamMouthForm": 0.3},
+    "done": {"ParamMouthForm": 0.6}, "error": {"ParamMouthForm": -0.4}
+  },
+  "levels": {},
+  "actions": {
+    "greet": {"duration_ms": 1600}, "acknowledge": {"duration_ms": 1200},
+    "react": {"duration_ms": 1200}, "drink_tea": {"duration_ms": 9800}
+  }
+}
