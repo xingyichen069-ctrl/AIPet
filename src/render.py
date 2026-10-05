@@ -49,6 +49,34 @@ def esc(s) -> str:
     return html.escape(str(s))
 
 
+def calendar_age(when: datetime, ref: datetime) -> str:
+    """Relative dates follow the display timezone's calendar, not elapsed 24h."""
+    days = (ref.date() - when.astimezone(ref.tzinfo).date()).days
+    if days == 0:
+        return "今天"
+    if days == 1:
+        return "昨天"
+    if days == -1:
+        return "明天"
+    return f"{days} 天前" if days > 0 else f"{-days} 天后"
+
+
+CALENDAR_JS = r"""
+function calendarAge(timestamp, reference) {
+  const date = new Date(timestamp);
+  const today = reference || new Date();
+  if (isNaN(date.getTime()) || isNaN(today.getTime())) return '';
+  // Comparing calendar components avoids DST days of 23 or 25 hours.
+  const day = d => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+  const days = Math.round((day(today) - day(date)) / 86400000);
+  if (days === 0) return '今天';
+  if (days === 1) return '昨天';
+  if (days === -1) return '明天';
+  return days > 0 ? `${days} 天前` : `${-days} 天后`;
+}
+"""
+
+
 def render() -> Path:
     entries = M.load_journal()
     st = M.load_state()
@@ -74,9 +102,8 @@ def render() -> Path:
         dname, dcolor = decay_label(e)
         imp = e.get("importance", 3)
         stars = "★" * imp + "☆" * (5 - imp)
-        ts = M.parse_ts(e["ts"])
-        age_days = (ref - ts).days
-        age = "今天" if age_days == 0 else f"{age_days} 天前"
+        ts = M.parse_ts(e["ts"]).astimezone()
+        age = calendar_age(ts, ref)
 
         tags = "".join(
             f'<span class="tag" data-tag="{esc(t)}">#{esc(t)}</span>'
@@ -91,7 +118,7 @@ def render() -> Path:
                      if prog else "")
 
         rows.append(f"""
-        <div class="row" data-tags="{esc(' '.join(e.get('tags') or []))}">
+        <div class="row" data-ts="{esc(ts.isoformat())}" data-tags="{esc(' '.join(e.get('tags') or []))}">
           <div class="heat" title="记忆热度 {bar}%">
             <div class="heat-bar" style="height:{bar}%;background:{dcolor}"></div>
             <span class="heat-num">{bar}</span>
@@ -104,7 +131,7 @@ def render() -> Path:
               <span class="dot" style="background:{dcolor}"></span>
               <span class="decay">{dname}</span>
               <span class="sep">·</span>
-              <span>{ts:%m月%d日}</span>
+              <span class="date" title="{ts:%Y-%m-%d %H:%M:%S %z}">{ts:%m月%d日}</span>
               <span class="sep">·</span>
               <span class="age">{age}</span>
               {emo}
@@ -294,9 +321,26 @@ def render() -> Path:
 </footer>
 
 <script>
+{CALENDAR_JS}
 const rows = [...document.querySelectorAll('.row')];
 const q = document.getElementById('q');
 const chips = document.getElementById('cloud');
+
+function refreshCalendarLabels(){{
+  const reference = new Date();
+  rows.forEach(row => {{
+    const timestamp = row.dataset.ts;
+    const date = new Date(timestamp);
+    if (isNaN(date.getTime())) return;
+    row.querySelector('.age').textContent = calendarAge(timestamp, reference);
+    row.querySelector('.date').textContent =
+      `${{String(date.getMonth() + 1).padStart(2, '0')}}月${{String(date.getDate()).padStart(2, '0')}}日`;
+  }});
+}}
+refreshCalendarLabels();
+setInterval(refreshCalendarLabels, 60000);
+window.addEventListener('pageshow', refreshCalendarLabels);
+document.addEventListener('visibilitychange', refreshCalendarLabels);
 
 function apply(){{
   const term = q.value.trim().toLowerCase();

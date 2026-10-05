@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import sys
 import threading
 import time
@@ -342,7 +343,7 @@ _cache_lock = threading.Lock()
 
 @dataclass
 class QQEvent:
-    kind: str = ""              # group_at | c2c | group_add_robot | ...
+    kind: str = ""              # group_at | group_message (background) | c2c | ...
     msg_id: str = ""
     content: str = ""
     ts: datetime = field(default_factory=M.now)
@@ -353,6 +354,7 @@ class QQEvent:
     union_openid: str = ""      # 跨场景统一，可能为空
     username: str = ""          # 昵称，可能为空串
     member_role: str = ""       # member | admin | owner
+    author_is_bot: bool = False
 
     # 富媒体。实测的形态（2026-09-16，群里发图）：
     #   content = " "（一个空格），attachments = [{content_type, filename, url, ...}]
@@ -392,14 +394,45 @@ class QQEvent:
         return (M.now() - self.ts).total_seconds()
 
 
-def parse_event(t: str, d: dict) -> QQEvent | None:
+def group_bot_ids(group_id: str) -> set[str]:
+    """Optional verified group-scoped identity; never infer it from a nickname."""
+    try:
+        config = json.loads((M.ROOT / "data/qq.json").read_text(encoding="utf-8"))
+        value = config.get("bot_member_ids", {}).get(group_id, [])
+    except (OSError, ValueError, AttributeError):
+        return set()
+    if isinstance(value, str):
+        value = [value]
+    return {item for item in value if isinstance(item, str) and item} if isinstance(value, list) else set()
+
+
+def _mentions_bot(d: dict, bot_ids) -> bool:
+    """Only an explicit mention of this bot can turn background into a request."""
+    own = {str(value) for value in bot_ids if value}
+    for mention in d.get("mentions") or []:
+        if not isinstance(mention, dict):
+            continue
+        if any(
+                str(mention.get(key) or "") in own
+                for key in ("id", "user_openid", "member_openid")):
+            return True
+    # Some deliveries retain the structured mention in content instead.
+    return any(value in own for value in re.findall(r"<@!?([^>]+)>", d.get("content") or ""))
+
+
+def parse_event(t: str, d: dict, bot_ids=()) -> QQEvent | None:
     """把网关事件转成 QQEvent。不关心的类型返回 None。"""
-    if t == "GROUP_AT_MESSAGE_CREATE":
+    if t in ("GROUP_AT_MESSAGE_CREATE", "GROUP_MESSAGE_CREATE"):
         a = d.get("author") or {}
+        directed = t == "GROUP_AT_MESSAGE_CREATE" or _mentions_bot(d, bot_ids)
+        content = (d.get("content") or "").strip()
+        if directed:
+            content = re.sub(r"<@!?([^>]+)>",
+                             lambda match: "" if match.group(1) in bot_ids else match.group(0), content).strip()
         return QQEvent(
-            kind="group_at",
+            kind="group_at" if directed else "group_message",
             msg_id=d.get("id", ""),
-            content=(d.get("content") or "").strip(),
+            content=content,
             ts=_ts(d.get("timestamp")),
             scene="group",
             group_openid=d.get("group_openid", ""),
@@ -407,6 +440,7 @@ def parse_event(t: str, d: dict) -> QQEvent | None:
             union_openid=a.get("union_openid", "") or "",
             username=(a.get("username") or "").strip(),
             member_role=a.get("member_role", "") or "",
+            author_is_bot=a.get("bot") is True,
             attachments=list(d.get("attachments") or []),
         )
     if t == "C2C_MESSAGE_CREATE":
@@ -603,6 +637,8 @@ class QQGateway:
         self._attempts = 0
         self._closing = False
         self.dedupe = Dedupe()
+        self._bot_ids: set[str] = set()
+        self._bot_name = ""
         # 见过但没处理的事件类型。用来在日志里只报一次，不刷屏。
         self._seen_types: set[str] = set()
         self._started = False
@@ -777,7 +813,14 @@ class QQGateway:
             d = p.get("d") or {}
             if t == "READY":
                 self.session_id = d.get("session_id", "")
-                bot = (d.get("user") or {}).get("username", "?")
+                user = d.get("user") or {}
+                self._bot_ids.update(str(user[key]) for key in ("id", "user_openid", "member_openid")
+                                     if user.get(key))
+                appid, _ = secrets()
+                if appid:
+                    self._bot_ids.add(appid)
+                bot = user.get("username", "?")
+                self._bot_name = user.get("username", "")
                 self._state("ready", f"以 {bot} 的身份上线")
             elif t == "RESUMED":
                 self._state("ready", "会话已恢复")
@@ -807,9 +850,21 @@ class QQGateway:
             self._seen_types.add(t)
             log(f"事件类型（首次见到）：{t}｜顶层字段：{sorted(d)[:14]}")
 
-        ev = parse_event(t, d)
+        bot_ids = self._bot_ids | group_bot_ids(d.get("group_openid", ""))
+        ev = parse_event(t, d, bot_ids)
         if ev is None:
             return
+
+        if t == "GROUP_MESSAGE_CREATE":
+            log(f"全量群消息｜id={ev.msg_id[:40]}｜sender={ev.speaker_id[:12]}"
+                f"｜mentions={len(d.get('mentions') or [])}｜route={ev.kind}")
+            if d.get("mentions") and ev.kind == "group_message":
+                # Project only identity fields; message_scene can contain auth
+                # tokens and must never be dumped for mention diagnostics.
+                mentions = [{key: item[key] for key in ("id", "username", "bot", "user_openid", "member_openid")
+                             if key in item} for item in d["mentions"][:8] if isinstance(item, dict)]
+                log("提及未匹配｜" + json.dumps({"bot_ids": sorted(bot_ids), "bot_name": self._bot_name,
+                                             "mentions": mentions}, ensure_ascii=False)[:1200])
 
         # ★ 空内容的极可能就是图片：QQ 把图放在富媒体字段里，正文是空的。
         #   这里必须在**解析之后、交出去之前**看一眼原始 d ——
@@ -822,7 +877,10 @@ class QQGateway:
                     _v = json.dumps(d[_k], ensure_ascii=False)[:500]
                     log(f"    {_k} = {_v}")
 
-        if ev.msg_id and self.dedupe.seen(ev.msg_id):
+        # A background delivery must not suppress a later explicit @ delivery
+        # of the same message. The history layer upgrades the existing row.
+        dedupe_id = ("background:" if ev.kind == "group_message" else "") + ev.msg_id
+        if ev.msg_id and self.dedupe.seen(dedupe_id):
             log(f"重复推送，丢弃：{ev.msg_id[:24]}…")
             return
         log(f"收到 {ev.kind}｜{ev.username or '(无昵称)'}"
