@@ -584,9 +584,18 @@ CMD_RE = re.compile(r"^[/／]?(档位|思考|level|thinking)\s*[:：]?\s*(\S*)$"
 VER_RE = re.compile(r"^[/／]?(版本|更新|检查更新|version|update)\s*[:：]?\s*$", re.I)
 
 
+TAVILY_USAGE_RE = re.compile(
+    r"^[/／]?(?:查询\s*)?tavily\s*(?:用量|次数|额度|使用轮次|使用次数|剩余次数|剩余额度|usage|还剩多少(?:次)?|用了多少(?:次)?)?[？?。！!]*$", re.I)
+
+
 def command_reply(ev: QB.QQEvent, who: dict) -> str | None:
     """认一下是不是指令。不是就返回 None。"""
     text = (ev.content or "").strip()
+
+    if TAVILY_USAGE_RE.fullmatch(text):
+        if not who.get("is_owner"):
+            return "Tavily 用量仅主人可查询。"
+        return LT.tavily_usage()
 
     if VER_RE.match(text):
         if not who.get("is_owner"):

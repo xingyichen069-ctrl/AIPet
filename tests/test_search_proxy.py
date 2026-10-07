@@ -208,9 +208,10 @@ class SearchConsumers(unittest.TestCase):
         client = MagicMock()
         client.__enter__.return_value = client
         client.text.side_effect = OSError('connection http://secret-user:password@proxy.invalid:1080')
+        self.cfg['tools']['proxy'] = 'http://proxy.invalid:8080'
         with patch.object(P, 'ddgs_client', return_value=client):
             text = T.as_prompt_block('query')
-        self.assertIn('当前使用直连', text)
+        self.assertIn('当前使用代理', text)
         self.assertNotIn('password', text)
         self.assertNotIn('secret-user', text)
         self.assertNotIn('DNS 污染', text)
@@ -222,20 +223,22 @@ class SearchConsumers(unittest.TestCase):
             detect.assert_not_called()
 
     def test_local_setup_errors_keep_actionable_guidance(self):
-        for backend, expected in (('tavily', 'tavily_key'), ('searxng', 'searxng_url')):
-            self.cfg['tools']['search_backend'] = backend
-            self.assertIn(expected, T.as_prompt_block('query'))
-        self.cfg['tools']['search_backend'] = 'ddgs'
+        self.assertIn('tavily_api_key', T.as_prompt_block('query', source_scope='overseas'))
+        self.cfg['tools']['search_backend'] = 'searxng'
+        self.assertIn('searxng_url', T.as_prompt_block('query'))
+        self.cfg['tools'].update(search_backend='ddgs', proxy='http://proxy.invalid:8080')
         with patch.object(P, 'ddgs_client', side_effect=ImportError('synthetic missing dependency')):
             self.assertIn('准备环境', T.as_prompt_block('query'))
 
-    def test_tavily_searxng_and_update_use_shared_request(self):
+    def test_tavily_is_explicit_while_searxng_and_update_keep_proxy_routing(self):
         self.cfg['tools'].update(tavily_key='fixture-key', searxng_url='http://127.0.0.1:8000')
         payload = {'answer': 'a', 'results': [{'title': 'found', 'url': 'https://found.invalid'}]}
+        with patch.object(T.TAVILY, '_post', return_value=payload) as paid, patch.object(P, 'request') as req:
+            T.search('query', source_scope='overseas', use_cache=False)
+            self.assertEqual(paid.call_args.args[0]['search_depth'], 'basic')
+            self.assertEqual(paid.call_args.args[1], 'fixture-key')
+            req.assert_not_called()
         with patch.object(P, 'request', return_value=SimpleNamespace(text=json.dumps(payload))) as req:
-            T.search('query', backend='tavily', use_cache=False)
-            self.assertEqual(req.call_args.kwargs['method'], 'POST')
-            self.assertEqual(req.call_args.kwargs['headers']['Authorization'], 'Bearer fixture-key')
             T.search('query', backend='searxng', use_cache=False)
             self.assertIn('/search?q=query', req.call_args.args[0])
             req.return_value = SimpleNamespace(text='[{"name":"v0.5.0"}]')

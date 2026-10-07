@@ -40,7 +40,7 @@ def main() -> int:
             shutil.copyfile(PROJECT / "data" / filename, root / "data" / filename)
         shutil.copyfile(PROJECT / "VERSION", root / "VERSION")
         env = dict(os.environ)
-        for key in ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "AIPET_HOME"):
+        for key in ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "TAVILY_API_KEY", "AIPET_HOME"):
             env.pop(key, None)
         env.update(QT_QPA_PLATFORM="offscreen", PYTHONIOENCODING="utf-8",
                    AIPET_TEST_WORK=str(root / "work"), AIPET_HOME=str(root),

@@ -170,13 +170,23 @@ def get_system() -> str:
     return "\n".join(lines)
 
 
-def web_search(query: str, kind: str = "text", max_results: int = 5) -> str:
+def web_search(query: str, kind: str = "text", max_results: int = 5,
+               source_scope: str = "default") -> str:
     """联网搜索。需要时效性信息时用。kind 可以是 text 或 news。"""
     try:
         import tools
-        return tools.as_prompt_block(query, int(max_results), kind)
+        return tools.as_prompt_block(query, int(max_results), kind, source_scope=source_scope)
     except Exception as e:
         return f"搜索失败：{e}"
+
+
+def tavily_usage() -> str:
+    """Read-only quota query, available to the desktop and the verified QQ owner."""
+    context = tool_context()
+    if context.get("source") == "qq" and not context.get("is_owner"):
+        return "Tavily 用量仅主人可查询。"
+    import tavily_search
+    return tavily_search.usage_text(M.ROOT, M.CFG.get("tools", {}))
 
 
 def recall(query: str, limit: int = 8) -> str:
@@ -528,17 +538,30 @@ SPECS = [
     {
         "type": "function",
         "function": {
+            "name": "tavily_usage",
+            "description": "查询 Tavily 已用次数和剩余额度，区分本安装预留与官方账号统计。查询不消耗搜索次数；QQ 仅主人可查。",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "web_search",
             "description": "联网搜索最新信息。涉及新闻、时事、你不确定的事实、"
-                           "或训练数据之后才发生的事时用。",
+                           "或训练数据之后才发生的事时用。默认走普通搜索；"
+                           "确需境外来源时才选 source_scope=overseas（Tavily 额度）；境内信息、普通英文查询或搜索失败仍用 default。"
+                           "出现英文、外国品牌或普通搜索失败本身不是切换理由。只发送公开查询词，"
+                           "不传聊天记录、私人记忆或密钥。结果是来源摘录，不代表已读网页全文。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "搜索关键词"},
                     "kind": {"type": "string", "enum": ["text", "news"],
                              "description": "text 普通搜索，news 新闻"},
-                    "max_results": {"type": "integer",
-                                    "description": "返回几条，默认 5"},
+                    "max_results": {"type": "integer", "minimum": 1, "maximum": 5,
+                                    "description": "返回几条，默认 5，最多 5"},
+                    "source_scope": {"type": "string", "enum": ["default", "overseas"],
+                                     "description": "默认 default；确实需要境外来源才选 overseas"},
                 },
                 "required": ["query"],
             },
@@ -755,8 +778,9 @@ DISPATCH = {
                            bool(a.get("force", False))),
     "get_time": lambda a: get_time(),
     "get_system": lambda a: get_system(),
+    "tavily_usage": lambda a: tavily_usage(),
     "web_search": lambda a: web_search(a.get("query", ""), a.get("kind", "text"),
-                                       a.get("max_results", 5)),
+                                       a.get("max_results", 5), a.get("source_scope", "default")),
     "recall": lambda a: recall(a.get("query", ""), a.get("limit", 8)),
     "remember": lambda a: remember(a.get("text", ""), a.get("importance", 3),
                                    a.get("tags", ""), a.get("decay", "normal"),

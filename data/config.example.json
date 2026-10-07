@@ -80,9 +80,9 @@
     "fs_root": "",
     "_fs_root": "她能读写的那个目录（沙箱根）。留空 = 用户主目录下的 AIPet 文件夹。填绝对路径即可改成任何地方 —— 这是最该按自己习惯设的一项。",
     "search_backend": "ddgs",
-    "_search_backend": "ddgs | tavily | searxng",
+    "_search_backend": "普通搜索：ddgs（无代理时直连 Bing）或 searxng。Tavily 仅在 source_scope=overseas 时使用，旧全局 tavily 设置不再让普通查询消耗额度。",
     "tavily_key": "",
-    "_tavily_key": "填了才能用 tavily 后端；额度与收费以 tavily.com 当前方案为准。",
+    "_tavily_key": "兼容旧配置；新密钥请填 data/secrets.json 的 tavily_api_key，仅按需境外搜索使用。",
     "searxng_url": "",
     "_searxng_url": "自建 SearXNG 实例地址，如 http://localhost:8080",
     "proxy": "auto",
@@ -92,6 +92,13 @@
       "general": 3600,
       "news": 900,
       "page": 86400
+    },
+    "tavily": {
+      "enabled": true,
+      "monthly_limit": 400,
+      "daily_limit": 20,
+      "timeout_seconds": 12,
+      "_说明": "只用 basic，每次预留 1 credit，失败不返还，UTC 日/月重置。单安装限额，不代表账号余额；使用免费账号且勿启用付费超额。密钥填 secrets.json 的 tavily_api_key。"
     }
   },
   "knowledge": {
