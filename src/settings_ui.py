@@ -7,7 +7,7 @@ import sys
 import uuid
 from PySide6.QtCore import QThread, Qt, Signal, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialogButtonBox,
     QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QInputDialog,
     QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
     QSpinBox, QTabWidget, QVBoxLayout, QWidget)
@@ -16,6 +16,7 @@ import provider_config as PC
 from settings_fields import CHOICES, GROUPS, LABELS
 from settings_style import apply_dialog_style
 from ui_theme import THEME_NAMES
+from configuration_windows import ConfigurationDialog, show_configuration_window
 
 
 def hint(text):
@@ -71,17 +72,17 @@ class ApiProbe(QThread):
             self.done.emit(False, "接口检查未完成，请稍后重试。")
 
 
-class SettingsDialog(QDialog):
+class SettingsDialog(ConfigurationDialog):
     saved = Signal()
 
     def __init__(self, root, appearance=None, pet=None, parent=None):
-        super().__init__(parent)
+        super().__init__()
         self.root, self.appearance, self.pet = Path(root), appearance, pet
         self.session = D.SettingsSession(self.root)
         self._api_probe = None
         self._proofs, self._catalogues = set(), {}
         self._profile_id = self._preset_id = None
-        self.setWindowTitle("设置 · 小日和")
+        self.setWindowTitle("配置 · 小日和")
         self.resize(980, 760)
         self.setMinimumSize(740, 540)
         layout = QVBoxLayout(self)
@@ -92,7 +93,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(hint("接口、思考、记忆和外观都在这里。只保存你改过的内容；人格管理仍是独立窗口。"))
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
-        self.status = QLabel("未修改设置")
+        self.status = QLabel("未修改配置")
         self.status.setObjectName("settingsStatus")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
@@ -182,6 +183,7 @@ class SettingsDialog(QDialog):
                 label.setTextInteractionFlags(Qt.TextSelectableByMouse)
                 paths.addRow(name, label)
         page.addStretch()
+        self.disable_default_buttons()
 
     def _api_page(self):
         page = self._page("模型与接口")
@@ -566,7 +568,7 @@ class SettingsDialog(QDialog):
         for key, title, w in (("theme", "主题", self.theme_combo), ("font_size", "字号（px）", self.font_spin), ("glass_opacity", "玻璃不透明度", self.opacity_spin)):
             form.addRow(title, w)
             self._fields.append(("appearance", (key,), w, self._value(w), "str"))
-        form.addRow(hint("设置与人格窗口使用系统界面字体；Windows 与 Codex 的系统字体一致，使用 Segoe UI 和中文字体回退。"))
+        form.addRow(hint("配置与人格窗口使用系统界面字体；Windows 与 Codex 的系统字体一致，使用 Segoe UI 和中文字体回退。"))
         if "live2d" in config:
             self._config_group(page, "config", "live2d", config["live2d"])
         page.addStretch()
@@ -590,7 +592,7 @@ class SettingsDialog(QDialog):
         else:
             self._secret_field(form, "qq_appid", "App ID", password=False)
             self._secret_field(form, "qq_secret", "Client Secret")
-            form.addRow(hint("仅用于本机 QQ 接入；保存后需自行重启本机 QQ 桥，设置窗口不会自动启停连接。"))
+            form.addRow(hint("仅用于本机 QQ 接入；保存后需自行重启本机 QQ 桥，配置窗口不会自动启停连接。"))
         form = self._group(page, "本机资料")
         for name, relative in (("打开私人配置文件夹", "data"), ("打开人格文件夹", "persona")):
             button = QPushButton(name)
@@ -599,9 +601,9 @@ class SettingsDialog(QDialog):
         page.addStretch()
 
     def _open_persona(self):
-        from persona_ui import PersonaDialog
-        dialog = PersonaDialog(self, root=self.root, appearance=self.appearance)
-        dialog.exec()
+        from persona_ui import open_persona_manager
+        return open_persona_manager(self, root=self.root, appearance=self.appearance,
+                                    on_changed=getattr(self.pet, "_persona_changed", None))
 
     def _require_model(self, c):
         if c.fingerprint() in self._initial_connections or c.fingerprint() in self._proofs:
@@ -682,7 +684,7 @@ class SettingsDialog(QDialog):
             self.tabs.setCurrentIndex(selected)
         except (OSError, ValueError, TypeError) as error:
             self.status.setText("未保存：" + str(error))
-            QMessageBox.warning(self, "设置没有保存", str(error))
+            QMessageBox.warning(self, "配置没有保存", str(error))
 
     def _reload_runtime(self):
         module = sys.modules.get("memory")
@@ -761,23 +763,26 @@ class SettingsDialog(QDialog):
         worker.deleteLater()
 
     def _running(self):
-        return self._api_probe is not None and self._api_probe.isRunning()
+        # Keep the window busy until its queued finished callback is handled;
+        # otherwise a fast reopen/retry can delete the next check's live thread.
+        return self._api_probe is not None
 
     def _refresh_style(self):
         apply_dialog_style(self, self.appearance)
 
-    def reject(self):
+    def _can_close(self):
         if self._running():
             self.status.setText("正在检查接口，请等待检查结束后关闭。")
-            return
+            return False
         try:
             dirty = self._collect() != self.session.original
         except (ValueError, TypeError):
             dirty = True
-        if dirty and QMessageBox.question(self, "尚未保存", "放弃尚未保存的更改并关闭？") != QMessageBox.Yes:
-            return
-        super().reject()
+        return not dirty or QMessageBox.question(
+            self, "尚未保存", "放弃尚未保存的更改并关闭？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes
 
-    def closeEvent(self, event):
-        event.ignore()
-        self.reject()
+
+def open_settings(root, appearance=None, pet=None):
+    return show_configuration_window(root, "configuration",
+                                     lambda: SettingsDialog(root, appearance, pet))

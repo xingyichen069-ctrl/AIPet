@@ -1252,7 +1252,7 @@ class PetWindow(QWidget):
         m.addSeparator()
         m.addAction("打开记忆面板", self._open_memory_view)
         m.addAction("人格管理", self._open_persona_manager)
-        m.addAction("设置", self._open_settings)
+        m.addAction("配置", self._open_settings)
 
         # ── QQ ──────────────────────────────────────────────
         # 状态从 data/qq_status.json 读。QQ 桥是**独立进程**，
@@ -1350,6 +1350,9 @@ class PetWindow(QWidget):
         """
         if getattr(self, "_quitting", False):
             os._exit(0)                     # 第二次点 = 不等了
+        from configuration_windows import close_configuration_windows
+        if not close_configuration_windows(ROOT):
+            return
         self._quitting = True
         self._stop_live2d()
         if self.chat:
@@ -1563,7 +1566,9 @@ class PetWindow(QWidget):
 
     def _open_persona_manager(self):
         from persona_ui import open_persona_manager
-        open_persona_manager(self)
+        return open_persona_manager(self, root=ROOT, on_changed=self._persona_changed)
+
+    def _persona_changed(self):
         if self.chat:
             self.chat.refresh_head()
 
@@ -1572,13 +1577,12 @@ class PetWindow(QWidget):
         open_local(T.THINKING_FILE)
 
     def _open_settings(self):
-        from settings_ui import SettingsDialog
+        from settings_ui import open_settings
         from PySide6.QtWidgets import QMessageBox
         try:
-            dialog = SettingsDialog(ROOT, self.appearance, self, self)
-            dialog.exec()
-        except (OSError, ValueError) as error:
-            QMessageBox.warning(self, "无法打开设置", str(error))
+            return open_settings(ROOT, self.appearance, self)
+        except (OSError, ValueError, TypeError) as error:
+            QMessageBox.warning(self, "无法打开配置", str(error))
 
     def _open_memory_view(self):
         """

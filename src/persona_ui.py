@@ -4,21 +4,24 @@ from __future__ import annotations
 from pathlib import Path
 import json
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QComboBox, QTabWidget, QDialog, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QListWidget,
+    QComboBox, QTabWidget, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QListWidget,
     QMessageBox, QPushButton, QPlainTextEdit, QVBoxLayout,
 )
 
 from persona_manager import PersonaManager
 from settings_style import apply_dialog_style
+from configuration_windows import ConfigurationDialog, show_configuration_window
 import settings_data as SETTINGS
 
 
-class PersonaDialog(QDialog):
+class PersonaDialog(ConfigurationDialog):
+    changed = Signal()
+
     def __init__(self, parent=None, root=None, appearance=None):
-        super().__init__(parent)
+        super().__init__()
         self.manager = PersonaManager(root or Path(__file__).resolve().parent.parent)
         self.appearance = appearance or getattr(parent, 'appearance', None)
         self._drafts = {}
@@ -86,6 +89,7 @@ class PersonaDialog(QDialog):
         if self.appearance:
             self.appearance.changed.connect(self._refresh_style)
         self._refresh_style()
+        self.disable_default_buttons()
 
     def _refresh_style(self):
         apply_dialog_style(self, self.appearance)
@@ -236,6 +240,7 @@ class PersonaDialog(QDialog):
                           self._mood_originals, self._extra_original, self._extra_drafts):
                 cache.clear()
             self._reload(selected)
+            self.changed.emit()
         except (ValueError, OSError) as e:
             QMessageBox.information(self, "人格管理", str(e))
 
@@ -245,6 +250,7 @@ class PersonaDialog(QDialog):
         try:
             self.manager.set_active(self.current_id)
             self._reload(self.current_id)
+            self.changed.emit()
             QMessageBox.information(self, "人格管理", "已经切换。之后的新对话会使用这个人格。")
         except (ValueError, OSError) as e:
             QMessageBox.information(self, "人格管理", str(e))
@@ -284,6 +290,7 @@ class PersonaDialog(QDialog):
             old = self._originals[self.current_id]
             self._originals[self.current_id] = (text, old[1], old[2])
             self._capture_draft()
+            self.changed.emit()
             message = "已更新所选角色的 SOUL。"
             if item["backup"]:
                 message += f"\n旧文件备份：{item['backup']}"
@@ -293,18 +300,14 @@ class PersonaDialog(QDialog):
         except (ValueError, OSError, UnicodeError) as e:
             QMessageBox.information(self, "人格管理", f"导入失败：{e}")
 
-    def reject(self):
+    def _can_close(self):
         self._capture_draft()
         dirty = any(v != self._originals.get(k) for k, v in self._drafts.items()) or any(
             v != self._extra_original.get(k) for k, v in self._extra_drafts.items()) or any(
             v != self._mood_originals.get(k) for k, v in self._mood_drafts.items())
-        if dirty and QMessageBox.question(self, '尚未保存', '放弃尚未保存的人格或档案更改并关闭？') != QMessageBox.Yes:
-            return
-        super().reject()
-
-    def closeEvent(self, event):
-        event.ignore()
-        self.reject()
+        return not dirty or QMessageBox.question(
+            self, '尚未保存', '放弃尚未保存的人格或档案更改并关闭？',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes
 
     def _import_avatar(self):
         if not self.current_id:
@@ -315,11 +318,18 @@ class PersonaDialog(QDialog):
         try:
             self.manager.import_avatar(path, self.current_id)
             self._reload(self.current_id)
+            self.changed.emit()
         except (ValueError, OSError) as e:
             QMessageBox.information(self, "人格管理", f"导入失败：{e}")
 
 
-def open_persona_manager(parent=None) -> bool:
-    dialog = PersonaDialog(parent)
-    dialog.exec()
-    return True
+def open_persona_manager(parent=None, root=None, appearance=None, on_changed=None):
+    root = Path(root or Path(__file__).resolve().parent.parent)
+
+    def create():
+        dialog = PersonaDialog(parent, root=root, appearance=appearance)
+        if on_changed is not None:
+            dialog.changed.connect(on_changed)
+        return dialog
+
+    return show_configuration_window(root, 'persona', create)

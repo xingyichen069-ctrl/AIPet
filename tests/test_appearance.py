@@ -104,6 +104,8 @@ class AppearanceTests(unittest.TestCase):
         pet.open_chat.assert_called_once()
         actions['人格管理'].trigger()
         pet._open_persona_manager.assert_called_once()
+        actions['配置'].trigger()
+        pet._open_settings.assert_called_once()
         advanced = actions['高级'].menu()
         self.assertIsInstance(advanced, ThemeMenu)
         self.assertIsInstance(advanced.actions()[1].menu(), ThemeMenu)
