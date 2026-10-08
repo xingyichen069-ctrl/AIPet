@@ -776,6 +776,8 @@ class ChatWindow(QWidget):
         a.setEnabled(not self.busy())
         menu.addAction('查看约定', self.pet.companion.show_tasks)
         menu.addAction('人格管理', self.pet._open_persona_manager)
+        if hasattr(self.pet, '_open_settings'):
+            menu.addAction('设置', self.pet._open_settings)
         add_appearance_menu(menu, self.appearance, self.change_appearance)
         if self.store.focus():
             menu.addAction('结束陪伴', self.pet.companion.stop_focus)

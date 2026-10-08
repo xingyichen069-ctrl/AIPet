@@ -42,6 +42,7 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import access_scope as ACCESS
 import memory as M  # noqa: E402
 
 _TOOL_CONTEXT = contextvars.ContextVar("aipet_tool_context", default={})
@@ -69,13 +70,10 @@ class ToolPolicy:
     allowed: frozenset[str] | None = None
 
     def allows(self, name: str) -> bool:
-        return self.allowed is None or name in self.allowed
+        return ACCESS.allows_tool(name) and (self.allowed is None or name in self.allowed)
 
     def visible(self, specs: list[dict]) -> list[dict]:
-        if self.allowed is None:
-            return list(specs)
-        return [spec for spec in specs
-                if spec.get("function", {}).get("name") in self.allowed]
+        return [spec for spec in specs if self.allows(spec.get("function", {}).get("name"))]
 
 
 def make_policy(blocked_tools: set[str] | None = None,
@@ -688,7 +686,9 @@ SPECS = [
         "function": {
             "name": "fs_write",
             "description":
-                f"把文字写进本地的文本文件。用户让你记录、整理、保存内容时用。"
+                f"把文字写进当前运行端的文本文件，支持UTF-8 Markdown（.md），"
+                f"文件正文可保留标题、表格和代码块；QQ聊天纯文本规则不限制文件内容。"
+                f"用户让你记录、整理、保存内容时用，保存不等于已通过QQ发送。"
                 f"父目录不存在会自动建。只能写 {_fs_root()} 里面的。",
             "parameters": {
                 "type": "object",
@@ -798,6 +798,8 @@ DISPATCH = {
 def call(name: str, args: dict, *, policy: ToolPolicy | None = None,
          allowed_tools: set[str] | None = None,
          deadline: float | None = None) -> str:
+    if not ACCESS.allows_tool(name):
+        return f"工具未获当前身份及会话授权：{name}"
     policy = policy or tool_context().get("tool_policy")
     if policy is None and allowed_tools is not None:
         policy = make_policy(allowed_tools=allowed_tools)

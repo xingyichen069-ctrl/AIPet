@@ -50,6 +50,8 @@ import local_tools as LT  # noqa: E402
 import people as P  # noqa: E402
 import qq_bot as QB  # noqa: E402
 import qq_text as QT  # noqa: E402
+import qq_schedule as SCHEDULE
+import qq_documents as DOCUMENTS
 
 if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("-", "") != "utf8":
     try:
@@ -564,7 +566,7 @@ def claim_reply(ev: QB.QQEvent, who: dict) -> str | None:
 #  指令口
 # ═══════════════════════════════════════════════════════════════
 
-# 群聊档位是本群公共设置，所有群成员都可以切换；私聊仍只允许主人改全局档位。
+# 群聊档位影响本群所有人，但与私聊一样，仅主人可修改。
 LEVEL_ALIAS = {
     "auto": "auto", "自动": "auto",
     "frugal": "frugal", "省电": "frugal",
@@ -587,10 +589,49 @@ VER_RE = re.compile(r"^[/／]?(版本|更新|检查更新|version|update)\s*[:�
 TAVILY_USAGE_RE = re.compile(
     r"^[/／]?(?:查询\s*)?tavily\s*(?:用量|次数|额度|使用轮次|使用次数|剩余次数|剩余额度|usage|还剩多少(?:次)?|用了多少(?:次)?)?[？?。！!]*$", re.I)
 
+HELP_RE = re.compile(r"[/／]?(?:help|帮助)", re.I)
+HELP_UNAVAILABLE = "帮助文档暂时无法发送，请稍后再试 /help。"
 
-def command_reply(ev: QB.QQEvent, who: dict) -> str | None:
+
+def help_reply() -> DOCUMENTS.MarkdownDocument | str:
+    try:
+        return DOCUMENTS.help_document(M.ROOT)
+    except (OSError, UnicodeError, DOCUMENTS.DocumentError):
+        log("帮助文档不可读或格式无效")
+        return HELP_UNAVAILABLE
+
+
+def command_usage(text: str) -> str | DOCUMENTS.MarkdownDocument | None:
+    """Keep explicit slash-command mistakes out of paid model requests."""
+    match = re.match(r"^[/／]([^\s:：]+)", text)
+    if not match:
+        return None
+    name = match.group(1).lower()
+    if name in {"help", "帮助"}:
+        return help_reply()
+    if name in {"档位", "思考", "level", "thinking"}:
+        return ("用法：/档位，或 /档位 档位名\n"
+                "可选：自动、省电、日常、认真、深究、极限、雷霆。\n"
+                "以 /档位 显示的已配置选项为准。\n"
+                "群聊可用 /档位 跟随。仅主人可调整。")
+    if name == "tavily":
+        return "用法：/tavily\n查看用量和额度，无需其他参数，仅主人可查询。"
+    if name in {"版本", "更新", "检查更新", "version", "update"}:
+        return "用法：/版本 或 /检查更新\n无需其他参数，仅主人可查询，不会安装更新。"
+    return "暂不支持这个指令。发送 /help 查看命令和参数。"
+
+
+def command_reply(ev: QB.QQEvent, who: dict) -> str | DOCUMENTS.MarkdownDocument | None:
     """认一下是不是指令。不是就返回 None。"""
     text = (ev.content or "").strip()
+
+    if HELP_RE.fullmatch(text):
+        return help_reply()
+
+    scheduled = SCHEDULE.command(M.ROOT, text, scene=ev.scene,
+                                 group=ev.group_openid, is_owner=who.get("is_owner") is True)
+    if scheduled is not None:
+        return scheduled
 
     if TAVILY_USAGE_RE.fullmatch(text):
         if not who.get("is_owner"):
@@ -610,15 +651,17 @@ def command_reply(ev: QB.QQEvent, who: dict) -> str | None:
 
     m = CMD_RE.match(text)
     if not m:
-        return None
-    if ev.scene != "group" and not who.get("is_owner"):
+        return command_usage(text)
+    if not who.get("is_owner"):
         return "这个只有他能调。"
 
     import thinking as T
-    names = {"auto": "自动"}
-    for k, v in T.load().get("presets", {}).items():
+    names = {"auto": "自动", "frugal": "省电", "daily": "日常", "serious": "认真",
+             "deep": "深究", "max": "极限", "thunder": "雷霆"}
+    presets = T.load().get("presets", {})
+    for k, v in presets.items():
         names[k] = v.get("name", k)
-    opts = "、".join(names.get(k, k) for k in LEVEL_ORDER)
+    opts = "、".join(names.get(k, k) for k in LEVEL_ORDER if k == "auto" or k in presets)
 
     arg = (m.group(2) or "").strip().lower()
     if not arg:
@@ -630,10 +673,10 @@ def command_reply(ev: QB.QQEvent, who: dict) -> str | None:
         return "本群之后跟随桌面的档位。"
     lv = LEVEL_ALIAS.get(arg)
     if not lv:
-        # ★ 认不出来就交回模型，别自作主张回"没这个档位"。
-        #   实测过："档位是什么意思"这种正常提问会被它吃掉，
-        #   然后答非所问。宁可漏一个打错字的提示。
-        return None
+        # Slash syntax asks for a command; ordinary wording remains a chat.
+        return command_usage(text)
+    if lv != "auto" and lv not in presets:
+        return f"当前运行端尚未配置「{names.get(lv, lv)}」档位，未修改设置。\n可用：{opts}。"
 
     if ev.scene == "group":
         old = group_level_for(ev.group_openid)
@@ -748,13 +791,32 @@ class Bridge:
             raise
 
     def _process(self, ev: QB.QQEvent, t0: float) -> None:
+        import access_scope
         who = identify(ev)
+        with access_scope.bind(source="qq", scene=ev.scene, group_id=ev.group_openid,
+                               is_owner=who.get("is_owner") is True, actor_id=who.get("id", ""),
+                               message_id=ev.msg_id):
+            self._process_scoped(ev, t0, who)
+
+    def _process_scoped(self, ev: QB.QQEvent, t0: float, who: dict) -> None:
         # ★ 带 <image url="..."/> 这类富媒体标签的必须整条记下来。
         #   平时截 40 字是为了日志好读，但图片消息的 URL 正好在
         #   40 字往后 —— 截了就永远查不出格式，只能靠猜。
         _raw = ev.content or ""
         _show = _raw if (len(_raw) <= 400 or "<" in _raw) else _raw[:40] + "…"
         log(f"{'主人' if who['is_owner'] else '群友'} {who['name']!r}：{_show}")
+
+        # Commands use code/static text before any attachment or model work.
+        # Keep command text/replies out of model history, including claim tokens.
+        c = claim_reply(ev, who)
+        if c is None:
+            c = command_reply(ev, who)
+        if c is not None:
+            if self.reply_enabled:
+                self._send(ev, c)
+            else:
+                log("（只收不发模式，不回复指令）")
+            return
 
         # ★ 图先读成文字，再入历史。
         #   放在入历史之前是有意的：这样她下次翻聊天记录，看到的是
@@ -766,27 +828,9 @@ class Bridge:
             if imported:
                 ev.content = ((ev.content or "").strip() + "\n\n" + imported).strip()
 
-        # ★ 先入历史再回话。
-        #   认领、低信息量这些也记 —— "再来再来"前面那句可能正是
-        #   "你几点上线"，不记的话上下文还是断的。
+        # Preserve ordinary conversation context, including short follow-ups.
         hist_append(conv_key(ev), "user", who["name"], ev.content,
                     message_id=ev.msg_id, speaker_id=ev.speaker_id)
-
-        # 认领优先，别拿去喂模型
-        c = claim_reply(ev, who)
-        if c is not None:
-            receipt = self._send(ev, c)
-            if receipt.accepted:
-                hist_append(conv_key(ev), "assistant", "", receipt.text)
-            return
-
-        # 指令口。也排在喂模型前面 —— 指令不是聊天内容。
-        c = command_reply(ev, who)
-        if c is not None:
-            receipt = self._send(ev, c)
-            if receipt.accepted:
-                hist_append(conv_key(ev), "assistant", "", receipt.text)
-            return
 
         # 带图的消息正文可能是空的，别拿"低信息量"把它误杀
         if not ev.attachments and ev.content.strip().lower() in IGNORE_EXACT:
@@ -868,14 +912,33 @@ class Bridge:
         except Exception as e:
             log(f"mood 日志出错：{type(e).__name__}: {e}")
 
-    def _send(self, ev: QB.QQEvent, text: str) -> DeliveryReceipt:
-        clean, notes = QT.sanitize(text)
-        if not clean:
-            log("清洗后没内容了，不发")
-            return DeliveryReceipt("skipped", response={"_skipped": "清洗后没内容了"})
-        if notes:
-            log(f"出站清洗：{'、'.join(notes)}")
-        r = QB.reply(ev, clean)
+    def _send(self, ev: QB.QQEvent, text: str | DOCUMENTS.MarkdownDocument) -> DeliveryReceipt:
+        return self._send_platform(ev, text)
+
+    def _send_platform(self, ev: QB.QQEvent, text: str | DOCUMENTS.MarkdownDocument) -> DeliveryReceipt:
+        if isinstance(text, DOCUMENTS.MarkdownDocument):
+            remaining = QB.PASSIVE_LIMIT_S - max(0, ev.age_seconds) - 12
+            if remaining <= 0:
+                return DeliveryReceipt("skipped", response={"_skipped": "文档回复已过期"})
+            try:
+                info = DOCUMENTS.upload(text, ev.scene, ev.group_openid or ev.user_openid,
+                                        QB._api, deadline=time.monotonic() + min(45, remaining))
+            except DOCUMENTS.DocumentError as error:
+                log(str(error))
+                # Uploads never send a message, so a short fallback is safe here.
+                return self._send_platform(ev, HELP_UNAVAILABLE)
+            clean = "文档：" + text.name
+            r = QB.reply_file(ev, info)
+            if not any(r.get(k) for k in ("id", "_skipped", "_error", "_http_error")):
+                r = {"_error": "文档发送结果无法确认"}
+        else:
+            clean, notes = QT.sanitize(text)
+            if not clean:
+                log("清洗后没内容了，不发")
+                return DeliveryReceipt("skipped", response={"_skipped": "清洗后没内容了"})
+            if notes:
+                log(f"出站清洗：{'、'.join(notes)}")
+            r = QB.reply(ev, clean)
         if r.get("_skipped"):
             log(f"发送失败：{r}")
             return DeliveryReceipt("skipped", clean, r)
@@ -1201,9 +1264,20 @@ def run(reply_enabled: bool = True) -> int:
         #   停在这儿，状态写进 qq_status.json，桌宠右键菜单能看见原因。
         on_fatal=lambda m: log(f"致命：{m}（已停下，不重试；看桌宠右键菜单）"),
     )
-    gw.start()
-    log(f"跑起来了（{'会回复' if reply_enabled else '只收不发'}）。Ctrl+C 停。")
-    return app.exec()
+    scheduled = SCHEDULE.Worker(M.ROOT, QB.send_group, log)
+    try:
+        if reply_enabled:
+            try:
+                scheduled.start()
+            except (OSError, ValueError):
+                log("定时任务未启动，请检查任务文件；QQ 对话仍可使用")
+        gw.start()
+        log(f"跑起来了（{'会回复' if reply_enabled else '只收不发'}）。Ctrl+C 停。")
+        return app.exec()
+    finally:
+        scheduled.stop()
+        gw.stop()
+        scheduled.join()
 
 
 def main() -> None:

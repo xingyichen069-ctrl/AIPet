@@ -95,7 +95,7 @@ class AppearanceTests(unittest.TestCase):
         for name in ('open_chat', '_start_company', '_open_memory_view', '_show_people',
                      '_toggle_panel', '_set_level', '_toggle_click_through', '_toggle_topmost',
                      '_toggle_focus_timer', 'probe_proxy', '_check_update', '_reload_model',
-                     '_open_config', '_open_persona_manager', 'quit_safely'):
+                     '_open_config', '_open_persona_manager', '_open_settings', 'quit_safely'):
             setattr(pet, name, Mock())
         with patch('pet.QQ_STATUS', return_value={'label': 'QQ 未连接', 'state': 'off'}), patch('pet.T.load', return_value={}):
             menu = PetWindow._build_menu(pet)

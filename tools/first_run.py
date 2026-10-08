@@ -105,24 +105,28 @@ def check(root: Path) -> bool:
         print("修正后再双击「检查配置.bat」。原文件未被修改，密钥不会在这里显示。")
         return False
     secrets = bootstrap.read_object(root / "data/secrets.json")
-    has_key = bool(os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY")
-                   or secrets.get("deepseek_api_key") or secrets.get("auth_token"))
+    import provider_config as providers
     cfg = bootstrap.read_object(root / "data/thinking.json")
+    params = cfg.get("presets", {}).get(cfg.get("current"), {}).get("params", {})
+    try:
+        connection = providers.resolve(secrets, params)
+    except (ValueError, TypeError) as error:
+        print(f"模型配置需要修正：{error}")
+        return False
     print(f"配置格式通过；当前档位：{cfg.get('current')}。")
-    print("大脑密钥：已填写。" if has_key else "大脑密钥：尚未填写；请双击「配置API.bat」。")
-    if any(os.environ.get(k) for k in ("DEEPSEEK_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_BASE_URL", "OPENAI_BASE_URL")):
-        print("检测到 API 环境变量，它们优先于文件中的密钥或地址。此处不显示具体值。")
+    print("大脑密钥：已填写。" if connection.key else "大脑密钥：尚未填写；请双击「配置API.bat」。")
+    print(f"模型调用名：{connection.model}；配置来源：{connection.source}。")
     print("这只是本地格式检查，不会联网，也不能确认密钥有效或账户额度。发一条对话后才能确认服务可用。")
     return True
 
 
 def edit_secrets(root: Path) -> None:
-    path = root / "data/secrets.json"
-    print(f"填写位置：{path}\n只改英文双引号内的值，保留其他字段。保存后运行「检查配置.bat」。")
-    if sys.platform == "win32":
-        subprocess.Popen(["notepad.exe", str(path)])
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", "-t", str(path)])
+    interpreter = environment_python(root)
+    if not interpreter.is_file():
+        raise RuntimeError("请先双击准备环境.bat，再打开图形设置。")
+    print("正在打开配置中心。保存更改后，下次对话使用新的模型与接口。")
+    if _run([str(interpreter), "-X", "utf8", str(root / "tools/settings.py")], root):
+        raise RuntimeError("配置窗口未能打开，请检查运行环境和配置文件。")
 
 
 def main() -> int:

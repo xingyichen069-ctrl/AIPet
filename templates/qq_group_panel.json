@@ -1,0 +1,15 @@
+{
+  "scope": "group",
+  "target_type": "all",
+  "panel": {
+    "remark": "aipet:group-command-panel:v1",
+    "items": [
+      {"type": "command", "name": "/help", "desc": "查看全部指令与常用参数", "only_admin": false},
+      {"type": "command", "name": "/符卡", "desc": "状态 预览 开启 关闭", "only_admin": false},
+      {"type": "command", "name": "/定时任务", "desc": "查看模板与管理本群任务", "only_admin": false},
+      {"type": "command", "name": "/档位", "desc": "七种强度 可跟随默认", "only_admin": false},
+      {"type": "command", "name": "/tavily", "desc": "查看联网检索用量与额度", "only_admin": false},
+      {"type": "command", "name": "/版本", "desc": "查看版本与可用更新", "only_admin": false}
+    ]
+  }
+}

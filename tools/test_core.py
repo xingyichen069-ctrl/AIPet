@@ -32,9 +32,11 @@ def main() -> int:
     work.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="core-tests-", dir=work) as name:
         root = Path(name)
-        for directory in ("src", "tests", "themes", "assets", "tools", "persona_defaults"):
+        for directory in ("src", "tests", "themes", "assets", "tools", "persona_defaults", "templates"):
             shutil.copytree(PROJECT / directory, root / directory,
                             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        (root / "docs").mkdir()
+        shutil.copyfile(PROJECT / "docs/QQ使用帮助.md", root / "docs/QQ使用帮助.md")
         (root / "data").mkdir()
         for filename in ("config.example.json", "thinking.example.json", "secrets.example.json"):
             shutil.copyfile(PROJECT / "data" / filename, root / "data" / filename)

@@ -1252,6 +1252,7 @@ class PetWindow(QWidget):
         m.addSeparator()
         m.addAction("打开记忆面板", self._open_memory_view)
         m.addAction("人格管理", self._open_persona_manager)
+        m.addAction("设置", self._open_settings)
 
         # ── QQ ──────────────────────────────────────────────
         # 状态从 data/qq_status.json 读。QQ 桥是**独立进程**，
@@ -1569,6 +1570,15 @@ class PetWindow(QWidget):
     def _open_config(self):
         import os
         open_local(T.THINKING_FILE)
+
+    def _open_settings(self):
+        from settings_ui import SettingsDialog
+        from PySide6.QtWidgets import QMessageBox
+        try:
+            dialog = SettingsDialog(ROOT, self.appearance, self, self)
+            dialog.exec()
+        except (OSError, ValueError) as error:
+            QMessageBox.warning(self, "无法打开设置", str(error))
 
     def _open_memory_view(self):
         """

@@ -185,6 +185,14 @@ class PersonaManager:
         return path.read_text(encoding="utf-8") if path else "{}"
 
     def save_moods(self, pid: str, text: str) -> None:
+        data = self.validate_moods(text)
+        folder = self.characters_dir / self.slug(pid)
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / "MOODS.json"
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    @staticmethod
+    def validate_moods(text: str) -> dict:
         data = json.loads(text)
         if not isinstance(data, dict) or not data:
             raise ValueError("情绪方案需要至少一个状态。")
@@ -197,10 +205,7 @@ class PersonaManager:
                     or not isinstance(row.get("sample", []), list)
                     or not all(isinstance(x, str) for x in row.get("sample", []))):
                 raise ValueError("状态需要 voice 文案、有效的 hours 时长和文本示例列表。")
-        folder = self.characters_dir / self.slug(pid)
-        folder.mkdir(parents=True, exist_ok=True)
-        path = folder / "MOODS.json"
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        return data
 
     def set_active(self, pid: str) -> dict:
         pid = self.slug(pid)

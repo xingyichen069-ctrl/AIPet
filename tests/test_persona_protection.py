@@ -264,7 +264,10 @@ class PersonaImportUI(unittest.TestCase):
         self.selected = self.manager.create('friend', '# Friend\nOriginal friend\n')
         with patch.object(UI, 'PersonaManager', return_value=self.manager):
             self.dialog = UI.PersonaDialog()
-        self.addCleanup(self.dialog.close)
+        def close_dialog():
+            with patch.object(UI.QMessageBox, 'question', return_value=UI.QMessageBox.Yes):
+                self.dialog.close()
+        self.addCleanup(close_dialog)
         self.dialog._reload(self.selected['id'])
 
     def test_cancel_keeps_files_selection_and_unsaved_text(self):

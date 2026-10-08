@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "id": "spellcards",
+  "title": "每日符卡",
+  "kind": "cards",
+  "timezone": "Asia/Shanghai",
+  "times": ["10:00", "14:00", "22:00"],
+  "catalog": "spellcards.md"
+}

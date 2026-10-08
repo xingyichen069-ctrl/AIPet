@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
-"""桌面大脑：默认DeepSeek、流式对话与工具循环。
+"""Desktop conversation transport with immutable per-turn provider settings.
 
-初次使用按README，通过配置API.bat填写data/secrets.json。
-当前六档参数来自thinking.json，新装默认max；省电和日常关闭思考。
-请求仍带DeepSeek专用字段，并非所有OpenAI兼容服务都能直接使用。
-当前映射为none关闭、low保留、medium/high映射high、max保留。
-
-进阶命令：check（真实API省电档检查）、ask、chat。
-请使用项目解释器；完整用法与验证边界见docs/命令行参考.md。
+Model/API profiles are edited in the settings window. Legacy secrets and
+provider-prefixed IDs remain readable; new profiles use exact provider IDs.
+DeepSeek thinking extensions are sent only for the DeepSeek protocol.
 """
 
 from __future__ import annotations
@@ -26,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import memory as M          # noqa: E402
 import thinking as T        # noqa: E402
 import conversation_core as C  # noqa: E402
+import provider_config as PC  # noqa: E402
 
 try:
     import local_tools as LT
@@ -109,22 +106,11 @@ def load_secrets() -> dict:
 
 
 def api_key() -> str:
-    secrets = load_secrets()
-    # 兼容设置中心和旧版配置：设置中心使用通用 provider 字段，旧版
-    # 仍使用 deepseek_* 字段。环境变量优先于本地文件。
-    return (os.environ.get("DEEPSEEK_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-            or secrets.get("deepseek_api_key", "")
-            or secrets.get("auth_token", ""))
+    return (PC.current() or PC.resolve(load_secrets())).key
 
 
 def base_url() -> str:
-    secrets = load_secrets()
-    return (os.environ.get("DEEPSEEK_BASE_URL")
-            or os.environ.get("OPENAI_BASE_URL")
-            or secrets.get("deepseek_base_url")
-            or secrets.get("base_url")
-            or DEFAULT_BASE)
+    return (PC.current() or PC.resolve(load_secrets())).base
 
 
 def provider_model() -> str:
@@ -185,19 +171,14 @@ def build_payload(query: str, history: list[dict] | None = None,
     if isinstance(p.get("tools"), list):
         tools = [t for t in tools if t["function"]["name"] in p["tools"]]
 
-    selected_model = p.get("model", "")
-    configured_model = provider_model()
-    # A provider-level model is authoritative when the old preset still has
-    # the historical DeepSeek default. This keeps migrated settings usable.
-    if configured_model and (not selected_model or str(selected_model).startswith("deepseek::")):
-        selected_model = configured_model
-    # Keep diagnostics and downstream metadata aligned with the model actually
-    # sent to the provider.
+    connection = PC.current() or PC.resolve(load_secrets(), p)
+    selected_model = connection.model
     r = dict(r)
     r["params"] = dict(r.get("params", {}))
     r["params"]["model"] = selected_model
+    r["provider"] = connection.name
     payload = {
-        "model": api_model(selected_model or "deepseek-flash"),
+        "model": selected_model,
         "messages": request.messages(),
         "max_tokens": (request.max_tokens
                         if request.max_tokens is not None
@@ -209,17 +190,7 @@ def build_payload(query: str, history: list[dict] | None = None,
     if tools:
         payload["tools"] = tools
 
-    if effort is None:
-        # 关闭思考模式 —— 这时 temperature 才真正生效
-        payload["thinking"] = {"type": "disabled"}
-        payload["temperature"] = p.get("temperature", 0.75)
-        for param in ("frequency_penalty", "presence_penalty"):
-            if param in p:
-                payload[param] = p[param]
-    else:
-        # 思考模式：temperature 会被静默忽略，不传更诚实
-        payload["reasoning_effort"] = effort
-        payload["thinking"] = {"type": "enabled"}
+    PC.apply_parameters(payload, connection, p)
 
     return payload, r
 
@@ -240,7 +211,7 @@ def _request(payload: dict, key: str, timeout: float = 30):
         },
         method="POST",
     )
-    return urllib.request.urlopen(req, timeout=max(0.1, float(timeout)))
+    return urllib.request.build_opener(PC.NoRedirect()).open(req, timeout=max(0.1, float(timeout)))
 
 
 def _deadline_expired(deadline: float | None) -> bool:
@@ -276,9 +247,15 @@ def stream(query, history=None, level=None, cancelled=None, system=None,
            max_tokens=None, block_tools=None, allowed_tools=None, options=None,
            deadline=None):
     import persona_runtime as PR
-    with PR.bind(M.ROOT, (options or {}).get("persona_id")):
+    try:
+        snapshot = C.snapshot_options(query, level, options)
+        connection = PC.resolve(load_secrets(), snapshot.get("params", {}))
+    except (ValueError, TypeError) as error:
+        yield ("error", str(error))
+        return
+    with PR.bind(M.ROOT, snapshot.get("persona_id")), PC.bind(connection):
         yield from _stream(query, history, level, cancelled, system, max_tokens,
-                           block_tools, allowed_tools, options, deadline)
+                           block_tools, allowed_tools, snapshot, deadline)
 
 
 def _stream(query: str, history: list[dict] | None = None,
@@ -420,7 +397,8 @@ def _stream(query: str, history: list[dict] | None = None,
         messages.append({
             "role": "assistant",
             "content": "".join(content_buf),
-            "reasoning_content": "".join(reasoning_buf),
+            **({"reasoning_content": "".join(reasoning_buf)}
+               if not PC.current() or PC.current().protocol == "deepseek" else {}),
             "tool_calls": [
                 {"id": s["id"] or f"call_{i}", "type": "function",
                  "function": {"name": s["name"], "arguments": s["args"] or "{}"}}
@@ -533,24 +511,15 @@ def ask_with_system(query: str, system: str,
 
 
 def check() -> bool:
-    key = api_key()
-    if not key:
-        print("✗ 没有 API key")
-        print(f"  放到 {SECRETS}：{{\"deepseek_api_key\": \"sk-xxxx\"}}")
-        print("  Windows 请双击「配置API.bat」，填写 data/secrets.json 后保存。")
+    """Use the same short, private-data-free test as the settings window."""
+    try:
+        connection = PC.resolve(load_secrets())
+        print("正在测试默认模型方案（固定短句，最多 64 tokens）…")
+        print(PC.probe(connection))
+        return True
+    except (ValueError, OSError) as error:
+        print(f"接口检查未完成：{error}")
         return False
-
-    print("✓ 已读到 API key（不显示内容）")
-    print(f"  base_url：{base_url()}")
-    print("  正在测试连通性…")
-
-    text, reasoning, r = ask("回复「通」一个字，不要标点。", level="frugal")
-    if r.get("error"):
-        print(f"✗ {r['error']}")
-        return False
-    print(f"✓ 模型回复：{text.strip()[:40]}")
-    print(f"  实际模型：{r['params'].get('model')} · 档位 {r['name']}")
-    return True
 
 
 # ═══════════════════════════════════════════════════════════════

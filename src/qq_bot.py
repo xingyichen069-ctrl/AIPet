@@ -588,6 +588,22 @@ def reply(ev: QQEvent, content: str, dedupe: "Dedupe | None" = None) -> dict:
     return send_c2c(ev.user_openid, content, ev.msg_id, seq)
 
 
+def reply_file(ev: QQEvent, file_info: str) -> dict:
+    """Send one prepared document as a passive reply, without a text preamble."""
+    if not ev.msg_id or ev.age_seconds > PASSIVE_LIMIT_S:
+        return {"_skipped": "缺少有效的被动回复消息"}
+    destination = ev.group_openid if ev.scene == "group" else ev.user_openid
+    if (ev.scene not in ("group", "c2c")
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", destination)
+            or not isinstance(file_info, str) or not 0 < len(file_info) <= 64_000):
+        return {"_skipped": "无效的文档回复参数"}
+    prefix = "groups" if ev.scene == "group" else "users"
+    return _post(f"/v2/{prefix}/{destination}/messages", {
+        "msg_type": 7, "media": {"file_info": file_info},
+        "msg_id": ev.msg_id, "msg_seq": 1,
+    })
+
+
 # 本程序保留的消息年龄阈值；不作为当前平台规则的结论。
 PASSIVE_LIMIT_S = 240
 
