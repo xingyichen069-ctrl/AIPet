@@ -42,19 +42,13 @@ def _text(path: Path, limit: int) -> str:
 
 
 def initialize(root: Path) -> None:
-    """Install editable defaults once; updates never overwrite private copies."""
+    """Prepare private task storage without installing or overwriting catalogs."""
     root = Path(root)
     target = root / "data/qq_tasks"
     if target.is_symlink():
         raise ScheduleError("任务目录不能是符号链接")
     with STORE.state_lock(root):
         target.mkdir(parents=True, exist_ok=True)
-        source = root / "templates/qq_tasks"
-        for name in ("spellcards.json", "spellcards.md"):
-            dest = target / name
-            if not dest.exists():
-                raw = _text(source / name, 128 * 1024)
-                STORE.write_bytes(dest, raw.encode("utf-8"))
 
 
 def templates(root: Path) -> dict:

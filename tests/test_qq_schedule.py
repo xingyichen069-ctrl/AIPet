@@ -25,8 +25,17 @@ class Schedules(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
-        shutil.copytree(ROOT / "templates", self.root / "templates")
         S.initialize(self.root)
+        directory = self.root / "data/qq_tasks"
+        cfg = {"schema": 1, "id": "spellcards", "title": "测试卡片", "kind": "cards",
+               "timezone": "Asia/Shanghai", "times": ["10:00", "14:00", "22:00"],
+               "catalog": "spellcards.md"}
+        (directory / "spellcards.json").write_text(json.dumps(cfg), encoding="utf-8")
+        rows = ["| 符卡 | 持有者 | 解说 |", "|---|---|---|"]
+        for name, holder in [("测试「甲」", "样例甲"), ("测试『乙』", "样例乙"),
+                             ("测试-丙", "样例丙"), ("测试丁", "样例丁")]:
+            rows.append(f"| {name} | {holder} | 叮！今日份符卡推送 |")
+        (directory / "spellcards.md").write_text("\n".join(rows), encoding="utf-8")
         self.send = Mock(return_value={"id": "qq-accepted-fixture"})
 
     def tearDown(self):
@@ -43,11 +52,29 @@ class Schedules(unittest.TestCase):
     def state(self, group="GROUP_A", task="spellcards"):
         return S._state(self.root)["groups"][group][task]
 
+    def test_fresh_install_has_no_tasks_and_never_sends(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.assertEqual(S.templates(root), {})
+            self.assertEqual(S.run_due(root, self.send, now=stamp()), 0)
+            S.initialize(root)
+            self.assertEqual(list((root / "data/qq_tasks").iterdir()), [])
+            self.send.assert_not_called()
+
+    def test_old_source_catalog_is_not_imported(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "templates/qq_tasks"
+            source.mkdir(parents=True)
+            (source / "spellcards.json").write_text("private legacy content")
+            S.initialize(root)
+            self.assertEqual(S.templates(root), {})
+
     def test_defaults_are_disabled_and_preview_does_not_enable_or_rotate(self):
         self.assertEqual(self.run_at(), 0)
         self.assertIn("未开启", self.cmd("/符卡 状态"))
         text = self.cmd("/符卡 预览")
-        self.assertEqual(text, "叮！今日份符卡推送：\n灵\n符\n﹁\n梦\n想\n封\n印\n﹂\n持有者：博丽灵梦")
+        self.assertEqual(text, "叮！今日份符卡推送：\n测\n试\n﹁\n甲\n﹂\n持有者：样例甲")
         self.assertEqual(S._state(self.root)["groups"], {})
         self.send.assert_not_called()
 
@@ -158,8 +185,8 @@ class Schedules(unittest.TestCase):
 
     def test_document_cards_survive_real_sanitizer_and_two_line_intro(self):
         cfg=S.templates(self.root)["spellcards"]
-        deck=S.cards(self.root,cfg);self.assertEqual(len(deck),128)
-        self.assertEqual(len({(card['name'],card['holder']) for card in deck}),128)
+        deck=S.cards(self.root,cfg);self.assertEqual(len(deck),4)
+        self.assertEqual(len({(card['name'],card['holder']) for card in deck}),4)
         for card in deck:
             text=S.render(card);self.assertEqual(qq_text.sanitize(text),(text,[]))
             self.assertTrue(text.startswith("叮！今日份符卡推送：\n"))
@@ -228,7 +255,7 @@ class Schedules(unittest.TestCase):
         self.cmd()
         self.run_at();self.run_at(stamp(hour=14));self.run_at(stamp(hour=22))
         self.run_at(stamp(day=9))
-        self.assertIn('持有者：十六夜咲夜',self.send.call_args.args[1])
+        self.assertIn('持有者：样例丁',self.send.call_args.args[1])
         cfg=S.templates(self.root)['spellcards'];p=self.root/'data/qq_tasks/spellcards.md'
         p.write_text('| 符卡 | 持有者 | 解说 |\n|---|---|---|\n| 梦符「春」 | 测试人物 | 花影<br>月色 |\n',encoding='utf-8')
         self.assertEqual(S.cards(self.root,cfg)[0]['intro'],'花影\n月色')

@@ -34,3 +34,6 @@ _t.py
 *.cmo3
 *.can3
 *.psd
+
+# Private task catalogs stay outside source distributions.
+/templates/qq_tasks/
