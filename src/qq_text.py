@@ -6,7 +6,7 @@ qq_text.py —— QQ 出站文本的本地处理
 sanitize() 在 qq_bot._post() 出站前调用，bridge 也用它记录实际发送文本。
 这些是早期接入沿用的本地策略，不是当前平台规则的保证；
 修改使用文档不会自动改变这些函数的行为。接入与现状见
- docs/QQ机器人接入提示词.md。
+ docs/developer_开发者/QQ机器人接入提示词.md。
 
 用法：python src/qq_text.py selftest（纯文本函数检查）
 """

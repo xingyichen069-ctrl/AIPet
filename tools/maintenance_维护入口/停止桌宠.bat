@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-cd /d "%~dp0"
+cd /d "%~dp0..\.."
 
 rem ====================================================
 rem  Stop the desktop pet from the outside.

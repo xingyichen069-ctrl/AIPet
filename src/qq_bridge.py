@@ -26,7 +26,7 @@ qq_bridge.py —— 把 QQ 来的消息接到小日和的脑子里
 群聊和私聊默认跟随桌面，群覆盖可用 /档位 跟随 清除，不强制 daily。
 当前实现仍设 REPLY_BUDGET_S 处理预算、输出额度和文本清洗；
 这些是本程序保留的处理策略，不代表当前 QQ 平台的硬性会话限制。
-接入无需 Cherry Studio 或外部 MCP，步骤见 docs/QQ机器人接入提示词.md。
+接入无需 Cherry Studio 或外部 MCP，步骤见 docs/developer_开发者/QQ机器人接入提示词.md。
 
 ═══ 用法 ═══
     python src/qq_bridge.py selftest      # 灌假事件，不联网
@@ -1245,7 +1245,7 @@ def run(reply_enabled: bool = True) -> int:
 
     appid, secret = QB.secrets()
     if not appid or not secret:
-        print("没配 QQ 凭据。请在 data/secrets.json 填写 qq_appid 和 qq_secret；见 docs/QQ机器人接入提示词.md。")
+        print("没配 QQ 凭据。请在 data/secrets.json 填写 qq_appid 和 qq_secret；见 docs/developer_开发者/QQ机器人接入提示词.md。")
         return 1
     if reply_enabled and not B.api_key():
         print("没配大脑 API 密钥。请通过配置API.bat，在 data/secrets.json 填写 deepseek_api_key。")

@@ -8,7 +8,7 @@ migrate.py —— 换新装的时候，把私人内容搬过去
 
 推荐把新版解压到新目录，复制私人资料，检查后使用；旧目录保留供回退。
 不要用直接覆盖安装来代替备份，尤其旧版本曾跟踪用户档位配置。
-新手请双击 迁移私人内容.bat：选旧目录、查看清单、确认后复制。
+新手请双击 tools/maintenance_维护入口/迁移私人内容.bat：选旧目录、查看清单、确认后复制。
 本文件仍提供高级命令行入口，QQ 进程控制行为本轮未修改。
 
 ═══════════════════════════════════════════════════════════════
@@ -479,7 +479,7 @@ def guess_source(target: Path) -> list[Path]:
     """
     在目标旁边找找有没有像个 AIPet 旧装的目录。
 
-    ★ 为什么要有这个：双击 `迁移私人内容.bat` 是不带参数的，原来只会打一段
+    ★ 为什么要有这个：双击 `tools/maintenance_维护入口/迁移私人内容.bat` 是不带参数的，原来只会打一段
       用法说明然后退出 —— 用户的感受就是"点了没反应"。而这个脚本的用法
       （把旧目录拖到 bat 上）本来就不直观。
 
@@ -633,7 +633,7 @@ def main() -> None:
             print("""
   没给旧目录，旁边也没找到别的 AIPet 装。怎么用：
 
-    把【旧版目录】拖到 迁移私人内容.bat 上
+    把【旧版目录】拖到 tools/maintenance_维护入口/迁移私人内容.bat 上
     或者命令行：python tools\\migrate.py D:\\旧版\\AIPet
 
   先只看清单不搬，加 --dry-run。
@@ -752,7 +752,7 @@ def main() -> None:
                 pass
         else:
             print(f"\n  ★ 旧装的 QQ 桥（PID {bridge}）没停掉，自己看一眼：")
-            print("    任务管理器里找 pythonw.exe，或者回旧目录双击 停止QQ.bat。")
+            print("    任务管理器里找 pythonw.exe，或者使用旧安装自己的 QQ 停止入口。")
 
     copied, over, backup_dir = apply(rows, target)
     print(f"\n  搬了 {copied} 个，覆盖 {over} 个。")
@@ -770,7 +770,7 @@ def main() -> None:
              else "直接启动桌宠试试"]
     steps.append("确认 data\\secrets.json 在，再启动桌宠")
     if bridge:
-        steps.append("在新目录双击 启动QQ.bat —— 旧的那条刚被停掉，QQ 现在没接上")
+        steps.append("在新目录双击 tools/maintenance_维护入口/启动QQ.bat —— 旧的那条刚被停掉，QQ 现在没接上")
     steps.append("保留旧目录供回退，确认新目录的人格、历史和对话正常")
 
     print("\n  接下来：")

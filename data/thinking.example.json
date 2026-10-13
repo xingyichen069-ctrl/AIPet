@@ -1,6 +1,6 @@
 {
   "_说明": "六档与自动模式的公开模板，新装默认max。私人选择保存于thinking.json；已有文件不会被准备环境覆盖。",
-  "_手册": "详细调参说明见 docs/思考强度配置手册.md",
+  "_手册": "详细调参说明见 docs/developer_开发者/思考强度配置手册.md",
   "current": "max",
   "_current": "auto | frugal | daily | serious | deep | max | thunder",
   "auto_rules": {

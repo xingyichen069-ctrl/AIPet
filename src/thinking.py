@@ -3,7 +3,7 @@
 
 六个手动档位：frugal/daily/serious/deep/max/thunder，另有auto。
 新装默认max；私人配置在data/thinking.json，发行模板为thinking.example.json。
-当前参数与限制见docs/思考强度配置手册.md。
+当前参数与限制见docs/developer_开发者/思考强度配置手册.md。
 """
 
 from __future__ import annotations

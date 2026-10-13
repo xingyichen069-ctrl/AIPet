@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-cd /d "%~dp0"
+cd /d "%~dp0..\.."
 
 rem ====================================================
 rem  Show whether the desktop pet and the QQ bridge are

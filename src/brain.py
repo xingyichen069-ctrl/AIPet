@@ -274,7 +274,7 @@ def _stream(query: str, history: list[dict] | None = None,
     """
     key = api_key()
     if not key:
-        yield ("error", "还没有配置 API key。Windows 请双击项目里的「配置API.bat」，在 data/secrets.json 的 deepseek_api_key 双引号内填写并保存，再重新发送。其他系统直接编辑这个文件。")
+        yield ("error", "还没有配置 API key。Windows 请双击项目里的「配置API.bat」，在「模型与接口」填写 API key 并保存，再重新发送。其他系统可编辑 data/secrets.json。")
         return
 
     # ★ 工具黑名单。QQ 那条路用它挡住 see_image —— 那个工具会把整个文件

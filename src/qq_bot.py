@@ -9,7 +9,7 @@ qq_bot.py —— 自己连 QQ 网关
 AIPet 直接连接 QQ 网关，保留事件中的发送者身份，交给 qq_bridge
 调用本地 brain、人格和记忆。无需 Cherry Studio 或外部 MCP。
 在 data/secrets.json 中填写 qq_appid 和 qq_secret，接入步骤见
-docs/QQ机器人接入提示词.md。更新安装后停用同一机器人的旧进程，
+docs/developer_开发者/QQ机器人接入提示词.md。更新安装后停用同一机器人的旧进程，
 避免多个客户端同时处理消息。旧 Cherry 配置提取脚本仅供历史迁移使用。
 
 ═══════════════════════════════════════════════════════════════
@@ -310,7 +310,7 @@ def access_token(force: bool = False) -> str:
             appid, secret = secrets()
             if not appid or not secret:
                 raise RuntimeError(
-                    "没配 QQ 凭据。请在 data/secrets.json 填写 qq_appid 和 qq_secret；见 docs/QQ机器人接入提示词.md。")
+                    "没配 QQ 凭据。请在 data/secrets.json 填写 qq_appid 和 qq_secret；见 docs/developer_开发者/QQ机器人接入提示词.md。")
             tok, exp = fetch_token(appid, secret)
             _token_cache.update({"token": tok, "exp": exp})
             try:
@@ -1316,7 +1316,7 @@ def _run(debug_only: bool = False) -> int:
 
     appid, secret = secrets()
     if not appid or not secret:
-        print("没配 QQ 凭据。请在 data/secrets.json 填写 qq_appid 和 qq_secret；见 docs/QQ机器人接入提示词.md。")
+        print("没配 QQ 凭据。请在 data/secrets.json 填写 qq_appid 和 qq_secret；见 docs/developer_开发者/QQ机器人接入提示词.md。")
         return 1
     print(f"app_id {appid}")
     try:

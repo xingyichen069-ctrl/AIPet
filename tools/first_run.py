@@ -102,7 +102,7 @@ def check(root: Path) -> bool:
         print("配置尚未通过检查：")
         for problem in problems:
             print(f"  - {problem}")
-        print("修正后再双击「检查配置.bat」。原文件未被修改，密钥不会在这里显示。")
+        print("修正后再双击「tools/maintenance_维护入口/检查配置.bat」。原文件未被修改，密钥不会在这里显示。")
         return False
     secrets = bootstrap.read_object(root / "data/secrets.json")
     import provider_config as providers
@@ -154,7 +154,7 @@ def main() -> int:
         if not check(ROOT):
             return 1
         if args.action in ("prepare", "check"):
-            print("\n下一步：填写 API → 检查配置 → 启动桌宠。更新用户请先运行「迁移私人内容.bat」。")
+            print("\n下一步：双击「配置API.bat」填写并保存接口，再双击「启动桌宠.bat」。更新旧版请先按 docs/使用指南.md 的更新步骤迁移资料。")
             return 0
         if args.action == "diagnose":
             return _run([str(interpreter), str(ROOT / "src/pet.py"), "--show-chat"], ROOT)
