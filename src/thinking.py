@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import memory as M  # noqa: E402
+from atomic_store import state_lock, write_json
 
 if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("-", "") != "utf8":
     try:
@@ -32,26 +33,42 @@ _cache: dict = {"mtime": 0, "data": None}
 # ---------------------------------------------------------------- 读写
 
 def load(force: bool = False) -> dict:
-    """带 mtime 缓存的重载——面板改完文件，agent 这边自动跟上。"""
-    if not THINKING_FILE.exists():
-        from bootstrap import initialize
-        initialize(THINKING_FILE.parent.parent)
+    """Keep runtime reads working; explicit refreshes and writes remain strict."""
     try:
-        mtime = THINKING_FILE.stat().st_mtime
-    except OSError:
-        return {"current": "daily", "presets": {}, "auto_rules": {}}
+        return _load_document(force)
+    except (OSError, ValueError, TypeError):
+        if force or _cache["data"] is None:
+            raise
+        return _cache["data"]
 
-    if force or mtime != _cache["mtime"] or _cache["data"] is None:
-        with open(THINKING_FILE, encoding="utf-8-sig") as f:
-            _cache["data"] = json.load(f)
-        _cache["mtime"] = mtime
+
+def _load_document(force: bool) -> dict:
+    path = THINKING_FILE
+    if not path.exists():
+        if _cache.get("source") == str(path):
+            raise FileNotFoundError("思考配置尚未保存完整。")
+        from bootstrap import initialize
+        initialize(path.parent.parent)
+    stat = path.stat()
+    signature = (str(path), stat.st_mtime_ns, stat.st_size)
+    if force or signature != _cache["mtime"] or _cache["data"] is None:
+        candidate = json.loads(path.read_text(encoding="utf-8-sig"))
+        if not isinstance(candidate, dict) or not isinstance(candidate.get("current", "daily"), str):
+            raise ValueError("思考配置必须是对象，当前档位必须是文本。")
+        for key in ("presets", "auto_rules", "ui"):
+            if key in candidate and not isinstance(candidate[key], dict):
+                raise ValueError(f"思考配置的 {key} 必须是对象。")
+        for preset in candidate.get("presets", {}).values():
+            if not isinstance(preset, dict) or not isinstance(preset.get("params", {}), dict):
+                raise ValueError("档位及其参数必须是对象。")
+        _cache.update(data=candidate, mtime=signature, source=str(path))
     return _cache["data"]
 
 
 def save(cfg: dict) -> None:
-    THINKING_FILE.write_text(
-        json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-    _cache["mtime"] = 0  # 强制下次重载
+    with state_lock(THINKING_FILE.parent.parent):
+        write_json(THINKING_FILE, cfg)
+        _cache["mtime"] = 0
 
 
 def current_level() -> str:
@@ -59,11 +76,12 @@ def current_level() -> str:
 
 
 def set_level(level: str) -> str:
-    cfg = load()
-    if level != "auto" and level not in cfg.get("presets", {}):
-        raise ValueError(f"未知档位：{level}（可选：auto, {', '.join(LEVELS)}）")
-    cfg["current"] = level
-    save(cfg)
+    with state_lock(THINKING_FILE.parent.parent):
+        cfg = deepcopy(load(force=True))
+        if level != "auto" and level not in cfg.get("presets", {}):
+            raise ValueError(f"未知档位：{level}（可选：auto, {', '.join(LEVELS)}）")
+        cfg["current"] = level
+        save(cfg)
     return level
 
 

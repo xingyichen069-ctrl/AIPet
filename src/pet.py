@@ -52,7 +52,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 try:
-    from PySide6.QtCore import (QEasingCurve, QFileSystemWatcher, QPoint, QPropertyAnimation,
+    from PySide6.QtCore import (QEasingCurve, QPoint, QPropertyAnimation,
                                 QRect, QRectF, Qt, QThread, QTimer, Signal)
     from PySide6.QtGui import (QAction, QBrush, QColor, QCursor, QFont, QFontMetrics,
                                QIcon, QKeySequence, QLinearGradient, QPainter, QPainterPath,
@@ -435,88 +435,6 @@ def shade(color, day: bool) -> QColor:
     """
     c = color if isinstance(color, QColor) else QColor(color)
     return c.darker(148) if day else c
-
-
-class Bubble(QLabel):
-    """一条消息气泡。自动换行、可选中、圆角不对称（朝向说话者那侧更圆）。"""
-
-    def __init__(self, text: str, role: str, maxw: int):
-        super().__init__(text)
-        self.setWordWrap(True)
-        self.setMaximumWidth(maxw)
-        self.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Minimum)
-
-        if role == "user":
-            self.setStyleSheet(f"""
-                background:{LIGHT['user_bg']}; color:{LIGHT['user_fg']};
-                border-radius:14px; border-top-right-radius:5px;
-                padding:9px 13px; font-size:13px;""")
-        elif role == "sys":
-            self.setStyleSheet(
-                f"background:transparent; color:{LIGHT['dim']};"
-                "font-size:11.5px; padding:1px 6px;")
-        elif role == "err":
-            self.setStyleSheet(
-                f"background:#fdf1ef; color:{LIGHT['err']};"
-                "border-radius:10px; padding:8px 12px; font-size:12.5px;")
-        else:                                   # pet
-            self.setStyleSheet(f"""
-                background:{LIGHT['bubble']}; color:{LIGHT['text']};
-                border:1px solid {LIGHT['border']};
-                border-radius:14px; border-top-left-radius:5px;
-                padding:9px 13px; font-size:13px;""")
-
-
-class TypingDots(QWidget):
-    """
-    三个跳动的点，表示"它在想"。
-
-    做成控件而不是文字，是因为文字版（"…"）看不出还在不在动 ——
-    网速慢的时候用户会以为卡死了。三个点轮流亮，一眼就知道活着。
-    """
-
-    PHASES = 3
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._phase = 0
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._tick)
-        self._timer.start(160)
-        self.setFixedSize(56, 36)
-        self.setStyleSheet("background:transparent;")
-
-    def _tick(self):
-        self._phase = (self._phase + 1) % self.PHASES
-        self.update()
-
-    def stop(self):
-        self._timer.stop()
-
-    def paintEvent(self, _):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing, True)
-
-        # 白底圆角，跟"它"的气泡同款，但左上角更圆（这是纯装饰，不指向谁）
-        card = QPainterPath()
-        card.addRoundedRect(QRectF(0.5, 0.5, self.width() - 1, self.height() - 1),
-                            14, 14)
-        p.setBrush(QColor(LIGHT["bubble"]))
-        p.setPen(QPen(QColor(LIGHT["border"]), 1))
-        p.drawPath(card)
-
-        r = 4.0
-        cy = self.height() / 2
-        first_x = self.width() / 2 - 13
-        for i in range(3):
-            lit = (self._phase == i)
-            c = QColor(LIGHT["accent"]) if lit else QColor("#c3cad2")
-            rr = r + 1.4 if lit else r
-            p.setPen(Qt.NoPen)
-            p.setBrush(c)
-            p.drawEllipse(QRectF(first_x + i * 13 - rr, cy - rr, rr * 2, rr * 2))
-        p.end()
 
 
 from companion_ui import ChatWindow, CompanionController, open_local
@@ -1066,15 +984,12 @@ class PetWindow(QWidget):
     # ---------------------------------------------------------- 配置热重载
 
     def _watch_config(self):
-        self.watcher = QFileSystemWatcher([str(T.THINKING_FILE)], self)
-        self.watcher.fileChanged.connect(self._on_config_changed)
+        from configuration_runtime import ConfigurationWatcher
+        self.config_watcher = ConfigurationWatcher(ROOT, self)
+        self.config_watcher.changed.connect(self.panel.update)
 
     def _on_config_changed(self):
-        # 有些编辑器是「替换文件」，得重新加回监视
-        if str(T.THINKING_FILE) not in self.watcher.files():
-            self.watcher.addPath(str(T.THINKING_FILE))
-        T.load(force=True)
-        self.panel.update()
+        self.config_watcher.check()
 
     # ---------------------------------------------------------- 绘制
 

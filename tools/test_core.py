@@ -20,6 +20,8 @@ import tempfile
 
 
 PROJECT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT / "tools"))
+from _workspace import scratch
 
 
 def main() -> int:
@@ -28,8 +30,11 @@ def main() -> int:
                         help="allow Python sockets only to 127.0.0.1 or ::1")
     parser.add_argument("modules", nargs="*")
     args = parser.parse_args()
-    work = PROJECT / "work"
-    work.mkdir(exist_ok=True)
+    # Nested Windows installs can exceed MAX_PATH in backup/export fixtures.
+    # Keep disposable copies in the short OS temp directory on Windows.
+    work = None if os.name == "nt" else scratch(PROJECT, "core-tests")
+    if work is not None:
+        work.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="core-tests-", dir=work) as name:
         root = Path(name)
         for directory in ("src", "tests", "themes", "assets", "tools", "persona_defaults", "templates"):
@@ -42,10 +47,10 @@ def main() -> int:
             shutil.copyfile(PROJECT / "data" / filename, root / "data" / filename)
         shutil.copyfile(PROJECT / "VERSION", root / "VERSION")
         env = dict(os.environ)
-        for key in ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "TAVILY_API_KEY", "AIPET_HOME"):
+        for key in ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "TAVILY_API_KEY", "BRAVE_API_KEY", "SERPER_API_KEY", "AIPET_HOME"):
             env.pop(key, None)
         env.update(QT_QPA_PLATFORM="offscreen", PYTHONIOENCODING="utf-8",
-                   AIPET_TEST_WORK=str(root / "work"), AIPET_HOME=str(root),
+                   AIPET_TEST_WORK=str(root / "t"), AIPET_HOME=str(root),
                    AIPET_TEST_LOOPBACK="1" if args.loopback else "0")
         command = """
 import os, socket, sys, unittest

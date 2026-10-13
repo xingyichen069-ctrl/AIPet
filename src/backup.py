@@ -406,7 +406,23 @@ def _write_staged(source: Path, target: Path, name: str, existed: bool) -> None:
         _publish(source, target)
 
 
+def _require_stopped():
+    from process_state import alive
+    for name in ('desktop.lock', 'qq.pid', 'qq_remote.pid.json'):
+        path = _root() / 'data' / name
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text(encoding='utf-8')
+            pid = int(json.loads(text)['pid']) if name.endswith('.json') else int(text.splitlines()[0])
+        except (OSError, ValueError, TypeError, KeyError, IndexError):
+            raise BackupError('无法确认本机进程状态，请先核对：' + name) from None
+        if alive(pid):
+            raise BackupError('恢复前请先退出本机桌宠和本机连接进程。')
+
+
 def _restore_in_place(stage: Path, names: list[str], legacy: bool) -> tuple[Path, Path]:
+    _require_stopped()
     root = _root()
     if legacy and any((root / "persona/characters").glob("*/SOUL.md")):
         raise BackupError("这是只含根 SOUL 的旧备份，当前已有角色库。请省略 --in-place 导出比较，"
@@ -503,9 +519,11 @@ def restore(name: str, *, in_place: bool = False) -> int:
 
 
 def prune(keep: int = KEEP) -> int:
-    files = sorted(_safe_path(_root(), "backups").glob("*.zip"), reverse=True)
+    files = sorted((path for path in _safe_path(_root(), "backups").glob("*.zip")
+                    if re.fullmatch(r"(?:[0-9]{8}-[0-9]{6}-auto|[0-9]{8}-[0-9]{6}-[0-9]{6}-auto-[0-9a-f]{12})\.zip", path.name)
+                    and path.is_file() and not _link(path)), reverse=True)
     removed = 0
-    for path in files[max(0, keep):]:
+    for path in files[max(1, keep):]:
         _safe_path(_root(), "backups/" + path.name).unlink()
         removed += 1
     return removed

@@ -119,14 +119,22 @@ def provider_model() -> str:
 
 
 def save_key(key: str) -> None:
-    d = load_secrets()
-    d["deepseek_api_key"] = key.strip()
-    SECRETS.parent.mkdir(parents=True, exist_ok=True)
-    SECRETS.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
-    try:                                   # 尽量收紧权限（Windows 上不一定生效）
-        os.chmod(SECRETS, 0o600)
-    except OSError:
-        pass
+    """Use the same merge/backup transaction as the configuration window."""
+    from settings_data import SettingsSession
+    key = key.strip()
+    if not key or any(ord(char) < 32 for char in key):
+        raise ValueError("API key 不能为空，也不能包含换行或控制字符。")
+    session = SettingsSession(SECRETS.parent.parent)
+    values = session.values["secrets"]
+    profiles = values.get("model_profiles") or {}
+    selected = values.get("default_model_profile")
+    if profiles and selected:
+        if selected not in profiles or not isinstance(profiles[selected], dict):
+            raise ValueError("默认模型方案不存在，请先在配置窗口重新选择。")
+        profiles[selected]["api_key"] = key
+    else:
+        values["deepseek_api_key"] = key
+    session.save()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -538,7 +546,7 @@ def main() -> None:
             print("用法：python src/brain.py setkey sk-xxxx")
             sys.exit(1)
         save_key(args[1])
-        print(f"已写入 {SECRETS}")
+        print("已保存到默认对话方案；环境变量优先时，实际凭据仍由环境变量决定。")
         check()
 
     elif cmd == "check":

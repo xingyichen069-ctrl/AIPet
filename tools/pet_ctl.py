@@ -27,7 +27,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 LOCK = ROOT / "data" / "desktop.lock"
 
 if getattr(sys.stdout, "encoding", "") and sys.stdout.encoding.lower().replace("-", "") != "utf8":
@@ -46,17 +47,8 @@ def read_pid() -> int:
 
 
 def alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        r = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
-            capture_output=True, text=True, timeout=8,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        return str(pid) in (r.stdout or "")
-    except (subprocess.SubprocessError, OSError):
-        return False
+    from process_state import alive as process_alive
+    return process_alive(pid)
 
 
 def status() -> int:

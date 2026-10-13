@@ -10,12 +10,11 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import tempfile
 from copy import deepcopy
 from datetime import datetime
 import uuid
 
-from atomic_store import state_lock
+from atomic_store import state_lock, write_bytes
 
 
 PERSONA_FILES = (
@@ -26,20 +25,7 @@ PERSONA_FILES = (
 
 
 def _write_atomic(path: Path, text: str) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as stream:
-            stream.write(text)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        try:
-            Path(temporary).unlink()
-        except OSError:
-            pass
+    write_bytes(path, text.encode("utf-8"))
 
 
 def _load_json(path: Path, default: dict | None = None) -> dict:

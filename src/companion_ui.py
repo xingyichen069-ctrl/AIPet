@@ -787,7 +787,7 @@ class ChatWindow(QWidget):
     def change_appearance(self, key, value):
         try:
             self.appearance.choose(key, value)
-        except OSError:
+        except (OSError, ValueError):
             QMessageBox.information(self, '外观', '外观设置暂时无法保存，请稍后再试。')
 
     def new_topic(self):

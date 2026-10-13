@@ -75,6 +75,35 @@ class BackupSafety(unittest.TestCase):
             self.put(name, value)
         return {name: (self.root / name).read_bytes() for name in files}
 
+    def test_auto_retention_preserves_manual_and_recovery_snapshots(self):
+        self.personas()
+        automatic = [BK.create("auto") for _ in range(3)]
+        manual, safety = BK.create("manual-auto"), BK.create("prerestore")
+        self.assertEqual(BK.prune(1), 2)
+        self.assertTrue(automatic[-1].exists())
+        self.assertTrue(manual.exists())
+        self.assertTrue(safety.exists())
+
+    def test_active_process_blocks_in_place_but_keeps_export_available(self):
+        self.personas()
+        archive = BK.create("fixture")
+        current = self.put("persona/characters/alpha/SOUL.md", "current")
+        self.put("data/desktop.lock", str(os.getpid()))
+        result, output = self.restore(archive, in_place=True)
+        self.assertEqual(result, 1, output)
+        self.assertIn("退出本机", output)
+        self.assertEqual(current.read_text(), "current")
+        self.assertEqual(self.restore(archive)[0], 0)
+        self.assertEqual(current.read_text(), "current")
+
+    def test_unreadable_process_marker_blocks_in_place_restore(self):
+        self.personas()
+        archive = BK.create("fixture")
+        self.put("data/desktop.lock", "unfinished")
+        result, output = self.restore(archive, in_place=True)
+        self.assertEqual(result, 1, output)
+        self.assertIn("无法确认", output)
+
     def test_complete_persona_snapshot_and_default_export_leave_live_data_unchanged(self):
         expected = self.personas()
         self.put("data/secrets.json", '{"key":"SYNTHETIC_PRIVATE_KEY"}')

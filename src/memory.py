@@ -75,11 +75,13 @@ CFG = load_config()
 P = CFG["paths"]
 
 
-def reload_config() -> dict:
-    """Reload the editable application config after an in-app settings save."""
+def reload_config(values=None) -> dict:
+    """Refresh a validated config snapshot shared by all desktop entry points."""
     global CFG, P
-    CFG = load_config()
-    P = CFG["paths"]
+    candidate = load_config() if values is None else values
+    if not isinstance(candidate, dict) or not isinstance(candidate.get("paths"), dict):
+        raise ValueError("应用配置缺少有效的资料位置。")
+    CFG, P = candidate, candidate["paths"]
     return CFG
 
 

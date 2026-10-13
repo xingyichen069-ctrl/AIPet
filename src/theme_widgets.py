@@ -200,7 +200,7 @@ def add_appearance_menu(menu, appearance, choose=None):
     def save(key, value):
         try:
             appearance.choose(key, value)
-        except OSError:
+        except (OSError, ValueError):
             QMessageBox.information(menu.parentWidget(), '外观', '外观设置暂时无法保存，请稍后再试。')
     choose = choose or save
     target = menu.addMenu('外观')

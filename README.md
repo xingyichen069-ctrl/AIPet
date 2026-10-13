@@ -7,7 +7,7 @@
 
 一个住在桌面上的 AI 角色：陪你聊天、记住话题，也能按需要看图片、读文件和提醒你。
 
-**0.6.0-beta.2** · Windows 10/11 x64 · 推荐 Python 3.12
+**0.6.0-beta.3** · Windows 10/11 x64 · 推荐 Python 3.12
 
 [下载最新版](https://github.com/xingyichen069-ctrl/AIPet/archive/refs/heads/main.zip) · [使用指南](docs/使用指南.md) · [更新日志](CHANGELOG.md) · [开发者文档](docs/developer_开发者/README.md)
 

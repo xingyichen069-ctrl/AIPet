@@ -61,17 +61,8 @@ QQ_LOG = ROOT / "data" / "qq.log"
 # ═══════════════════════════════════════════════════════════════
 
 def _alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        r = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
-            capture_output=True, text=True, timeout=8,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        return str(pid) in (r.stdout or "")
-    except (subprocess.SubprocessError, OSError):
-        return False
+    from process_state import alive as process_alive
+    return process_alive(pid)
 
 
 def _started(pids: list[int]) -> dict[int, float]:

@@ -1,11 +1,10 @@
 """Private desktop state and live appearance settings."""
 import json
-import os
 from pathlib import Path
 import re
-import tempfile
 
 from PySide6.QtCore import QObject, QFileSystemWatcher, QTimer, Signal
+from atomic_store import write_json, state_lock
 from ui_theme import touhou_palette, character_palette, theme_roles, THEME_NAMES
 
 
@@ -15,21 +14,6 @@ def read_json(path):
         return value if isinstance(value, dict) else {}
     except (OSError, ValueError):
         return {}
-
-
-def write_json(path, value):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix='.' + path.name, dir=path.parent)
-    try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-            json.dump(value, stream, ensure_ascii=False, indent=2)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
 
 
 class DesktopState:
@@ -117,9 +101,11 @@ class Appearance(QObject):
             raise ValueError('Unknown appearance preference')
         if key == 'theme' and value not in THEME_NAMES:
             raise ValueError('Unknown theme')
-        saved = read_json(self.overrides)
-        saved[key] = value
-        write_json(self.overrides, saved)
+        from settings_data import _load_json
+        with state_lock(self.root):
+            saved = _load_json(self.overrides)
+            saved[key] = value
+            write_json(self.overrides, saved)
         self.reload()
 
     def palette(self, day):

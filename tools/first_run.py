@@ -11,7 +11,9 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT / "tools"))
 import bootstrap
+from _workspace import scratch
 
 DEPENDENCY_CHECK = """
 import sys
@@ -46,12 +48,16 @@ def environment_python(root: Path) -> Path:
     return root / ".venv/bin/python"
 
 
-def _run(command: list[str], root: Path, **kwargs) -> int:
+def command_env(root: Path) -> dict[str, str]:
     env = dict(os.environ)
-    env.update(PYTHONIOENCODING="utf-8", PIP_CACHE_DIR=str(root / "work/pip-cache"),
-               UV_CACHE_DIR=str(root / "work/uv-cache"),
+    env.update(PYTHONIOENCODING="utf-8", PIP_CACHE_DIR=str(scratch(root, "cache", "pip")),
+               UV_CACHE_DIR=str(scratch(root, "cache", "uv")),
                UV_PYTHON_INSTALL_DIR=str(root / ".python"))
-    return subprocess.run(command, cwd=root, env=env, **kwargs).returncode
+    return env
+
+
+def _run(command: list[str], root: Path, **kwargs) -> int:
+    return subprocess.run(command, cwd=root, env=command_env(root), **kwargs).returncode
 
 
 def prepare_environment(root: Path) -> Path:

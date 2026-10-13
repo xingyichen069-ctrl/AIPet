@@ -782,22 +782,8 @@ class SettingsDialog(ConfigurationDialog):
             QMessageBox.warning(self, "配置没有保存", str(error))
 
     def _reload_runtime(self):
-        module = sys.modules.get("memory")
-        if module and Path(module.ROOT).resolve() == self.root.resolve():
-            module.reload_config()
-            thinking = sys.modules.get("thinking")
-            if thinking:
-                thinking._cache["mtime"] = 0
-            proxy = sys.modules.get("proxy")
-            if proxy:
-                proxy._cache["value"] = "\x00"
-            tools = sys.modules.get("tools")
-            if tools:
-                tools.TOOLS_CFG = module.CFG.get("tools", {})
-            knowledge = sys.modules.get("knowledge")
-            if knowledge:
-                knowledge.KCFG = module.CFG.get("knowledge", {})
-                knowledge.DOCS_DIR = module.ROOT / knowledge.KCFG.get("docs_dir", "knowledge")
+        from configuration_runtime import reload_runtime
+        reload_runtime(self.root)
         if self.appearance:
             self.appearance.reload()
         if self.pet and hasattr(self.pet, "panel"):

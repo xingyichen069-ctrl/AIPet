@@ -6,6 +6,8 @@ import sys
 import time
 
 PROJECT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT / 'tools'))
+from _workspace import scratch
 sys.path.insert(0, str(PROJECT / 'src'))
 import brain as B
 
@@ -16,7 +18,9 @@ CASES = ['我今天跟朋友吵了一架。', '今天没事找你，就坐一会
 
 def payload(query, draft=None):
     soul = (PROJECT / 'persona_defaults/reimu/SOUL.md').read_text(encoding='utf-8')
-    body, _ = B.build_payload(query, level='daily', system=soul, stream=False, max_tokens=1200)
+    options = B.C.snapshot_options(query, 'daily')
+    options['params'].update(reasoning_effort='none', tools=[])
+    body, _ = B.build_payload(query, level='daily', system=soul, stream=False, max_tokens=1200, options=options)
     examples = json.loads((PROJECT / 'persona_defaults/reimu/DIALOGUE.json').read_text(encoding='utf-8'))
     body.pop('tools', None)
     body['messages'][1:1] = [m for exchange in examples for m in exchange]
@@ -27,9 +31,9 @@ def payload(query, draft=None):
     return body
 
 
-def generate(body, key):
+def generate(body, connection):
     start = time.perf_counter()
-    with B._request(body, key, timeout=90) as response:
+    with B.PC.bind(connection), B._request(body, connection.key, timeout=90) as response:
         result = json.load(response)
     answer = result['choices'][0]['message'].get('content')
     if not isinstance(answer, str) or not answer.strip():
@@ -45,21 +49,22 @@ def main():
         for query in CASES:
             first, second = payload(query), payload(query, '尚未确认，不能说已经完成。')
             assert 'tools' not in first and 'tools' not in second
-            assert first['thinking']['type'] == 'disabled'
+            assert first.get('thinking', {'type': 'disabled'}) == {'type': 'disabled'}
         print('5 组单次/双次请求检查通过；未调用 API。实测请使用 --live。')
         return 0
-    key = B.api_key()
-    if not key:
+    connection = B.PC.resolve(B.load_secrets(), B.T.resolve(level='daily')['params'])
+    if not connection.key:
         print('当前安装未配置模型凭据，无法实测。')
         return 2
     rows = []
     for query in CASES:
-        draft, first_seconds = generate(payload(query), key)
-        rewritten, rewrite_seconds = generate(payload(query, draft), key)
+        with B.PC.bind(connection):
+            draft, first_seconds = generate(payload(query), connection)
+            rewritten, rewrite_seconds = generate(payload(query, draft), connection)
         rows.append(dict(query=query, one_pass=draft, two_pass=rewritten,
                          one_pass_seconds=first_seconds, rewrite_seconds=rewrite_seconds,
                          two_pass_seconds=round(first_seconds + rewrite_seconds, 3)))
-    out = PROJECT / 'work/persona-runtime/reimu-rewrite-results.json'
+    out = scratch(PROJECT, 'experiments_开发实验', 'persona-probe', 'reimu-rewrite-results.json')
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding='utf-8')
     print(out)
