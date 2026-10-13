@@ -187,15 +187,17 @@ class SearchConsumers(unittest.TestCase):
         self.cfg['tools']['proxy'] = route
         client = MagicMock()
         client.__enter__.return_value = client
-        client.text.return_value = [{'title': 'found', 'href': 'https://found.invalid', 'body': 'summary'}]
-        client.news.return_value = []
+        client.text.return_value = [{'title': 'query found', 'href': 'https://found.invalid', 'body': 'summary'}]
+        client.news.return_value = client.text.return_value
         with patch.object(P, 'ddgs_client', return_value=client) as factory:
-            self.assertEqual(T.search('query', use_cache=False)['results'][0]['title'], 'found')
-            self.assertEqual(T.search('query', kind='news', use_cache=False)['results'][0]['title'], 'found')
+            self.assertEqual(T.search('query', use_cache=False)['results'][0]['title'], 'query found')
+            self.assertEqual(T.search('query', kind='news', use_cache=False)['results'][0]['title'], 'query found')
         self.assertTrue(all(call.args[0] == route for call in factory.call_args_list))
         for call in client.text.call_args_list + client.news.call_args_list:
             self.assertNotIn('proxy', call.kwargs)
-        self.assertEqual(client.text.call_args.kwargs['timelimit'], 'w')
+        client.text.assert_called_once()
+        client.news.assert_called_once()
+        self.assertTrue(all(call.kwargs['timeout'] <= 3 for call in factory.call_args_list))
 
     def test_invalid_proxy_is_not_swallowed_by_search_or_fetch(self):
         self.cfg['tools']['proxy'] = 'malformed'
@@ -216,11 +218,14 @@ class SearchConsumers(unittest.TestCase):
         self.assertNotIn('secret-user', text)
         self.assertNotIn('DNS 污染', text)
 
-    def test_search_cache_hit_does_not_trigger_probe_or_request(self):
+    def test_search_cache_hit_uses_selected_route_without_provider_request(self):
         hit = {'backend': 'ddgs', 'answer': '', 'results': [{'title': 'cached'}]}
-        with patch.object(T, '_cache_get', return_value=hit), patch.object(P, 'detect') as detect:
+        with patch.object(T, '_cache_get', return_value=hit), \
+             patch.object(P, 'detect', return_value='http://proxy.invalid:8080') as detect, \
+             patch.object(P, 'ddgs_client') as provider:
             self.assertTrue(T.search('query')['cached'])
-            detect.assert_not_called()
+            detect.assert_called_once()
+            provider.assert_not_called()
 
     def test_local_setup_errors_keep_actionable_guidance(self):
         self.assertIn('tavily_api_key', T.as_prompt_block('query', source_scope='overseas'))
@@ -255,6 +260,37 @@ class SearchConsumers(unittest.TestCase):
              patch.object(P, 'request', return_value=SimpleNamespace(text='<p>fallback text</p>')) as req:
             self.assertEqual(T.fetch('https://target.invalid', use_cache=False), 'fallback text')
         self.assertEqual(req.call_args.kwargs['proxy_url'], route)
+
+    def test_searxng_alternative_keeps_the_selected_proxy_and_bounded_timeout(self):
+        route = 'http://proxy.invalid:8080'
+        self.cfg['tools'].update(proxy=route, searxng_url='https://search.invalid')
+        empty = SimpleNamespace(text='{"results": []}')
+        found = SimpleNamespace(text=json.dumps({'results': [
+            {'title': 'Reimu Hakurei', 'url': 'https://example.org/reimu'}]}))
+        with patch.object(P, 'request', side_effect=[empty, found]) as request, \
+             patch.object(T, '_search_tavily') as paid:
+            result = T.search('博丽灵梦', backend='searxng', fallback_query='Reimu Hakurei', use_cache=False)
+        self.assertTrue(result['fallback_used'])
+        self.assertEqual(request.call_count, 2)
+        self.assertTrue(all(call.kwargs['proxy_url'] == route for call in request.call_args_list))
+        self.assertTrue(all(0 < call.kwargs['timeout'] <= 10 for call in request.call_args_list))
+        paid.assert_not_called()
+
+    def test_searxng_cache_separates_instances_and_proxy_changes(self):
+        self.cfg['tools'].update(proxy='http://first-proxy.invalid:8080',
+                                 searxng_url='https://first-search.invalid')
+        found = SimpleNamespace(text=json.dumps({'results': [
+            {'title': 'query result', 'url': 'https://example.org/result'}]}))
+        with patch.object(P, 'request', return_value=found) as request:
+            self.assertFalse(T.search('query', backend='searxng')['cached'])
+            self.assertTrue(T.search('query', backend='searxng')['cached'])
+            self.cfg['tools']['searxng_url'] = 'https://second-search.invalid'
+            self.assertFalse(T.search('query', backend='searxng')['cached'])
+            self.cfg['tools']['proxy'] = 'http://second-proxy.invalid:8080'
+            self.assertFalse(T.search('query', backend='searxng')['cached'])
+        self.assertEqual(request.call_count, 3)
+        self.assertIn('second-search.invalid', request.call_args.args[0])
+        self.assertEqual(request.call_args.kwargs['proxy_url'], 'http://second-proxy.invalid:8080')
 
     def test_update_handles_http_and_proxy_failure_safely(self):
         for error in (urllib.error.HTTPError('https://unused.invalid', 403, 'blocked', None, None),

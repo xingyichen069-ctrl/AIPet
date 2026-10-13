@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialogButtonBox,
     QSpinBox, QTabWidget, QVBoxLayout, QWidget)
 import settings_data as D
 import provider_config as PC
+import search_api as SA
 from settings_fields import CHOICES, GROUPS, LABELS
 from settings_style import apply_dialog_style
 from ui_theme import THEME_NAMES
@@ -159,12 +160,7 @@ class SettingsDialog(ConfigurationDialog):
             if key in config:
                 self._config_group(page, "config", key, config[key])
         page.addStretch()
-        page = self._page("搜索与文件")
-        page.addWidget(hint("文件夹决定她能读写哪些资料。普通搜索不消耗 Tavily；境外资料按需使用它，额度为本安装的调用限制。"))
-        self._config_group(page, "config", "tools", config.get("tools", {}))
-        self._secret_field(self._group(page, "Tavily 凭据"), "tavily_api_key", "API key")
-        self._config_group(page, "config", "knowledge", config.get("knowledge", {}))
-        page.addStretch()
+        self._search_page(config)
         self._appearance_page(config)
         self._personal_page()
         page = self._page("高级")
@@ -184,6 +180,88 @@ class SettingsDialog(ConfigurationDialog):
                 paths.addRow(name, label)
         page.addStretch()
         self.disable_default_buttons()
+
+    def _search_page(self, config):
+        page = self._page("搜索与文件")
+        page.addWidget(hint(
+            "不配置搜索 API 也能用：默认在无代理时进行境内直连搜索，境外资料覆盖有限。"
+            "已有代理或自建 SearXNG 时，可用范围取决于对应网络与实例。"))
+        tools = config.get("tools", {})
+        form = self._group(page, "可选的搜索 API")
+        form.addRow(hint(
+            "需要更多资料来源时，可申请下面任一服务的搜索密钥。它与对话模型的 API key 不通用，"
+            "不需要填写模型名称。账号额度与价格以服务商后台为准。"))
+        self.search_provider_combo = combo([
+            (f"{info.name} · {'推荐，已接入' if info.integrated else '待接入自动搜索'}", key)
+            for key, info in SA.PROVIDERS.items()])
+        form.addRow("编辑服务", self.search_provider_combo)
+        form.addRow(hint("切换这里只切换编辑内容，不会选择默认搜索服务；各服务的未保存内容都会保留。"))
+        self.search_key_edits, self._search_panels = {}, {}
+        for provider, info in SA.PROVIDERS.items():
+            panel = QWidget()
+            details = QFormLayout(panel)
+            details.setContentsMargins(0, 0, 0, 0)
+            details.setSpacing(12)
+            details.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+            details.setRowWrapPolicy(QFormLayout.WrapLongRows)
+            details.addRow(hint(info.summary))
+            status = ("已接入：仅按需查找境外资料时使用，普通搜索不消耗 Tavily。" if info.integrated else
+                      "待接入自动搜索：可先保存密钥，独立接口已准备好；当前对话尚不会使用此服务。")
+            details.addRow("当前状态", hint(status))
+            links = QHBoxLayout()
+            for title, url in (("申请 / 管理密钥与额度", info.account_url), ("官方接口说明", info.docs_url)):
+                button = QPushButton(title)
+                button.clicked.connect(lambda _=False, target=url: QDesktopServices.openUrl(QUrl(target)))
+                links.addWidget(button)
+            details.addRow(links)
+            edit = self._secret_field(details, info.key_field, "搜索 API key")
+            edit.setPlaceholderText("从服务商后台复制密钥；不填账号密码")
+            self.search_key_edits[provider] = edit
+            details.addRow(hint(
+                f"本栏留空时会读取 {info.env_var} 环境变量；两处都未配置则不能使用此接口。"
+                if provider != "tavily" else
+                "本栏留空时仍兼容 TAVILY_API_KEY 环境变量与旧版 tavily_key；停用请关闭下面的开关。"))
+            endpoint = info.endpoint
+            if info.news_path != info.path:
+                endpoint += f"\n新闻：{info.method} https://{info.host}{info.news_path}"
+            address = hint(endpoint)
+            address.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            details.addRow("固定接口", address)
+            if provider == "tavily":
+                settings = merge_defaults({"enabled": True, "monthly_limit": 400,
+                    "daily_limit": 20, "timeout_seconds": 12}, tools.get("tavily", {}))
+                self._form_fields(details, "config", settings, ("tools", "tavily"))
+                details.addRow(hint(
+                    "只用 basic，每次预留 1 credit，失败也占本安装限额；日 / 月按 UTC 重置。"
+                    "每天上限 0–100、每月 0–1000、超时 0–20 秒，填 0 停止请求。"
+                    "这里的限额不代表账号余额，账户套餐请在服务商后台管理。"))
+            else:
+                settings = merge_defaults({"timeout_seconds": 12}, tools.get("search_apis", {}).get(provider, {}))
+                self._form_fields(details, "config", settings, ("tools", "search_apis", provider))
+                details.addRow(hint(
+                    "超时可设为 1–20 秒；此服务尚无本安装日 / 月计数，请在服务商后台设置用量限制。"))
+            details.addRow(hint("保存只检查密钥格式，不会调用搜索接口，也不会验证账号余额或网络可达性。"))
+            self._search_panels[provider] = panel
+            form.addRow(panel)
+        self.search_provider_combo.currentIndexChanged.connect(self._show_search_provider)
+        self._show_search_provider()
+        form = self._group(page, "普通搜索与网络（无需搜索 API）")
+        # Legacy tavily_key may contain a credential. Preserve it without
+        # rendering it as a plain-text field in the generic config editor.
+        ordinary = {key: value for key, value in tools.items()
+                    if key not in {"fs_root", "tavily", "tavily_key", "search_apis"}}
+        self._form_fields(form, "config", ordinary, ("tools",))
+        form = self._group(page, "文件读写范围")
+        form.addRow(hint("这个文件夹决定她能读写哪些资料，与网络搜索服务无关。"))
+        self._form_fields(form, "config", {"fs_root": tools.get("fs_root", ""),
+            "_fs_root": tools.get("_fs_root", "")}, ("tools",))
+        self._config_group(page, "config", "knowledge", config.get("knowledge", {}))
+        page.addStretch()
+
+    def _show_search_provider(self, *_):
+        selected = self.search_provider_combo.currentData()
+        for provider, panel in self._search_panels.items():
+            panel.setVisible(provider == selected)
 
     def _api_page(self):
         page = self._page("模型与接口")
@@ -650,6 +728,23 @@ class SettingsDialog(ConfigurationDialog):
                     raise ValueError("列表设置需要保留列表结构。")
             D._set(values[document], trail, value)
         if validate:
+            for provider, info in SA.PROVIDERS.items():
+                old_key = self.session.original["secrets"].get(info.key_field, "")
+                new_key = values["secrets"].get(info.key_field, "")
+                if old_key != new_key:
+                    SA.validate_key(provider, new_key)
+                before = self.session.original["config"].get("tools", {})
+                after = values["config"].get("tools", {})
+                if provider != "tavily":
+                    old = before.get("search_apis", {}).get(provider, {})
+                    new = after.get("search_apis", {}).get(provider, {})
+                    if old != new:
+                        SA.timeout_seconds(provider, after)
+                elif before.get("tavily") != after.get("tavily"):
+                    for key, ceiling in (("daily_limit", 100), ("monthly_limit", 1000), ("timeout_seconds", 20)):
+                        value = after.get("tavily", {}).get(key)
+                        if value is not None and (type(value) is not int or not 0 <= value <= ceiling):
+                            raise ValueError(f"Tavily {LABELS[key]}须为 0–{ceiling} 的整数。")
             if profiles_changed or routes:
                 for p in self._profiles.values():
                     self._require_model(PC.from_profile(p))
@@ -678,7 +773,7 @@ class SettingsDialog(ConfigurationDialog):
                 return
             self._reload_runtime()
             self.saved.emit()
-            self.status.setText("已保存更改。新请求使用新配置；桌宠形象与尺寸需重启后生效。")
+            self.status.setText("已保存更改；生效范围见各项说明。桌宠形象与尺寸需重启后生效。")
             selected = self.tabs.currentIndex()
             self._build_pages()
             self.tabs.setCurrentIndex(selected)

@@ -37,5 +37,5 @@ LABELS = {
     "thresholds": "分数分界", "signals": "问题特征", "tavily": "境外资料检索",
     "cache_ttl": "搜索缓存", "decay_lambda": "遗忘系数", "repo": "更新仓库",
 }
-CHOICES = {"tools.search_backend": [("普通搜索", "ddgs"), ("自建 SearXNG", "searxng")],
+CHOICES = {"tools.search_backend": [("普通搜索（无代理时境内直连）", "ddgs"), ("自建 SearXNG", "searxng")],
            "ui.position": [("右侧", "right"), ("左侧", "left"), ("上方", "top"), ("下方", "bottom")]}

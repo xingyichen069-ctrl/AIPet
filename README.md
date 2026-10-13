@@ -5,7 +5,7 @@
 
 <p align="center">
   <strong>桌面留个位置，想说话时就叫她。</strong><br>
-  <code>0.6.0-beta.1</code> · Windows 10/11 x64 · Python 3.11–3.14 · macOS 实验性
+  <code>0.6.0-beta.2</code> · Windows 10/11 x64 · Python 3.11–3.14 · macOS 实验性
 </p>
 
 <p align="center">
@@ -125,7 +125,7 @@
 
 </details>
 
-境内网页可直连；受限境外资料需自行配置系统代理／VPN 或 Tavily API。→ [联网配置与用量查询](docs/工具与沙箱.md#联网搜索)
+境内网页可直连；受限境外资料需自行配置系统代理／VPN 或 Tavily API。搜索密钥可在「配置 → 搜索与文件」填写；Brave / Serper 暂未接入自动搜索。→ [联网配置与用量查询](docs/工具与沙箱.md#联网搜索)
 
 ## 熟悉以后，再慢慢添置
 
@@ -240,7 +240,7 @@ zsh 启动桌宠.command prepare
 | [对话、约定与材料](新增功能说明.md) | [施工日志](CHANGELOG.md) | [版本管理](docs/版本管理.md) |
 | [beta.3 修订记录](docs/0.5.0-beta.3修订记录.md) | [表演控制与离线测试台](docs/performance-20261004/README.md) | [稳定性工作包](docs/stability-20261004/README.md) |
 
-当前为 **0.6.0-beta.1**。配置与人格窗口已在 Windows 检查，主线隔离回归通过；真实 QQ 收发、所有模型服务组合、全新机器安装、Mac 和长期常驻仍需后续验收。新功能见[配置中心](docs/配置中心.md)，历史记录见[施工日志](CHANGELOG.md)。
+当前为 **0.6.0-beta.2**。配置与人格窗口已在 Windows 检查，主线隔离回归通过；真实 QQ 收发、所有模型服务组合、全新机器安装、Mac 和长期常驻仍需后续验收。新功能见[配置中心](docs/配置中心.md)，历史记录见[施工日志](CHANGELOG.md)。
 
 <details>
 <summary>🛠️ 想一起修小屋？隔离测试入口在这里</summary>

@@ -169,11 +169,12 @@ def get_system() -> str:
 
 
 def web_search(query: str, kind: str = "text", max_results: int = 5,
-               source_scope: str = "default") -> str:
+               source_scope: str = "default", fallback_query: str = "") -> str:
     """联网搜索。需要时效性信息时用。kind 可以是 text 或 news。"""
     try:
         import tools
-        return tools.as_prompt_block(query, int(max_results), kind, source_scope=source_scope)
+        return tools.as_prompt_block(query, int(max_results), kind, source_scope=source_scope,
+                                     fallback_query=fallback_query)
     except Exception as e:
         return f"搜索失败：{e}"
 
@@ -546,7 +547,8 @@ SPECS = [
         "function": {
             "name": "web_search",
             "description": "联网搜索最新信息。涉及新闻、时事、你不确定的事实、"
-                           "或训练数据之后才发生的事时用。默认走普通搜索；"
+                           "或训练数据之后才发生的事时用。默认走普通搜索；已知等价别名时同时填 fallback_query，"
+                           "仅在无结果或明显不相关时免费再试一次，不要重复同一查询。"
                            "确需境外来源时才选 source_scope=overseas（Tavily 额度）；境内信息、普通英文查询或搜索失败仍用 default。"
                            "出现英文、外国品牌或普通搜索失败本身不是切换理由。只发送公开查询词，"
                            "不传聊天记录、私人记忆或密钥。结果是来源摘录，不代表已读网页全文。",
@@ -554,6 +556,8 @@ SPECS = [
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "搜索关键词"},
+                    "fallback_query": {"type": "string", "maxLength": 500,
+                        "description": "可选：已知的等价英文名或同义关键词，保留主题；程序保留 site: 与排除词。仅普通搜索可重试一次，Tavily 忽略此项。"},
                     "kind": {"type": "string", "enum": ["text", "news"],
                              "description": "text 普通搜索，news 新闻"},
                     "max_results": {"type": "integer", "minimum": 1, "maximum": 5,
@@ -780,7 +784,8 @@ DISPATCH = {
     "get_system": lambda a: get_system(),
     "tavily_usage": lambda a: tavily_usage(),
     "web_search": lambda a: web_search(a.get("query", ""), a.get("kind", "text"),
-                                       a.get("max_results", 5), a.get("source_scope", "default")),
+                                       a.get("max_results", 5), a.get("source_scope", "default"),
+                                       a.get("fallback_query", "")),
     "recall": lambda a: recall(a.get("query", ""), a.get("limit", 8)),
     "remember": lambda a: remember(a.get("text", ""), a.get("importance", 3),
                                    a.get("tags", ""), a.get("decay", "normal"),
